@@ -1,0 +1,10 @@
+name = "plot-mcp-worker"
+main = "src/index.js"
+compatibility_date = "2026-04-08"
+
+[[routes]]
+pattern = "plot-mcp.qdp.qzz.io/*"
+zone_name = "qdp.qzz.io"
+
+[vars]
+UPSTREAM_BASE = "https://lingion.pythonanywhere.com"
