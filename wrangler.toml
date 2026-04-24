@@ -1,0 +1,17 @@
+name = "plot-mcp-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-22"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "SHORT_LINKS"
+id = "6849ed23150a499fb64581e266c4f74f"
+preview_id = "fcf326226eb049f7bb5404ab938708fb"
+
+[build]
+command = ""
+
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = true
