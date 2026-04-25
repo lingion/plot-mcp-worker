@@ -41,6 +41,20 @@ const plotSeriesItemSchema = {
   additionalProperties: false,
 } as const;
 
+const piecewiseSegmentSchema = {
+  type: "object",
+  properties: {
+    expr: { type: "string" },
+    x_min: { type: "number" },
+    x_max: { type: "number" },
+    label: { type: "string" },
+    name: { type: "string" },
+    color: { type: "string" },
+  },
+  required: ["expr", "x_min", "x_max"],
+  additionalProperties: false,
+} as const;
+
 const plotAnnotationSchema = {
   type: "object",
   properties: {
@@ -64,7 +78,7 @@ const teachingParamsSchema = {
 } as const;
 
 const teachingToolProperties = {
-  topic: { type: "string", enum: ["parabola", "definite_integral", "tangent_derivative", "fourier_series", "projectile_motion", "simple_harmonic_motion", "rc_charging", "rlc_transient", "incline_force", "stress_strain", "venn_probability", "c_pointer_array", "c_struct_layout"] },
+  topic: { type: "string", enum: ["parabola", "definite_integral", "tangent_derivative", "fourier_series", "projectile_motion", "simple_harmonic_motion", "energy_conservation", "rc_charging", "rlc_transient", "incline_force", "stress_strain", "band_gap", "venn_probability", "c_pointer_array", "c_struct_layout"] },
   level: { type: "string", enum: ["intro", "college"], default: "college" },
   title: { type: "string" },
   params: teachingParamsSchema,
@@ -329,8 +343,8 @@ const TOOLS = [
     description: "Plot a single expression and return PNG data.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 } },
-      required: ["expr"], additionalProperties: false,
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 } },
+      additionalProperties: false,
     },
   },
   {
@@ -338,8 +352,8 @@ const TOOLS = [
     description: "Plot a single expression and return PNG/base64 payload.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
-      required: ["expr"], additionalProperties: false,
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
+      additionalProperties: false,
     },
   },
   {
@@ -347,8 +361,8 @@ const TOOLS = [
     description: "Generate a direct PNG URL for a single-expression plot.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
-      required: ["expr"], additionalProperties: false,
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
+      additionalProperties: false,
     },
   },
   {
@@ -712,16 +726,34 @@ function sanitizeForceAnalysisPayload(args: Record<string, unknown>) {
       }];
   const primaryBody = bodies.find((body) => body.forces.length > 0) || bodies[0];
   if (!primaryBody || primaryBody.forces.length === 0) throw new Error("forces is required");
+  const inclineDeg = parseNumber(args.incline_deg, 0);
+  const totalForces = bodies.reduce((sum, body) => sum + body.forces.length, 0);
+  const preferLocalAngles = Math.abs(inclineDeg) > 0.01;
+  const clusteredAngles = new Set(primaryBody.forces.map((force) => Math.round((((force.angle_deg % 360) + 360) % 360) / 12))).size;
+  const denseForceLayout = (preferLocalAngles && primaryBody.forces.length >= 4) || totalForces >= 6 || (primaryBody.forces.length >= 4 && clusteredAngles <= 3);
+  const autoSimplified: string[] = [];
+  const showComponents = args.show_components === undefined ? !denseForceLayout : args.show_components !== false;
+  if (denseForceLayout && args.show_components === undefined) autoSimplified.push("components");
+  const showAxes = args.show_axes === undefined ? !(denseForceLayout && preferLocalAngles) : args.show_axes !== false;
+  if (denseForceLayout && preferLocalAngles && args.show_axes === undefined) autoSimplified.push("axes");
+  const showAngleLabels = args.show_angle_labels === undefined ? false : Boolean(args.show_angle_labels);
+  if (denseForceLayout && args.show_angle_labels === undefined && preferLocalAngles) autoSimplified.push("angle labels");
+  const showResultant = args.show_resultant === undefined ? !(denseForceLayout && primaryBody.forces.length >= 5) : args.show_resultant !== false;
+  if (denseForceLayout && primaryBody.forces.length >= 5 && args.show_resultant === undefined) autoSimplified.push("resultant");
+  const warning = [
+    args.warning === undefined ? "" : limitText(args.warning, "", MAX_TITLE_LENGTH),
+    autoSimplified.length > 0 ? limitText(`auto-simplified ${autoSimplified.join(", ")} to keep dense force layouts readable`, "", MAX_TITLE_LENGTH) : "",
+  ].filter(Boolean).join("; ");
   return {
     title: limitText(args.title, "Force analysis", MAX_TITLE_LENGTH),
     body_label: primaryBody.label,
     forces: primaryBody.forces,
-    show_components: args.show_components !== false,
-    show_axes: args.show_axes !== false,
-    show_resultant: args.show_resultant !== false,
-    show_angle_labels: Boolean(args.show_angle_labels),
-    incline_deg: parseNumber(args.incline_deg, 0),
-    warning: args.warning === undefined ? undefined : limitText(args.warning, "", MAX_TITLE_LENGTH),
+    show_components: showComponents,
+    show_axes: showAxes,
+    show_resultant: showResultant,
+    show_angle_labels: showAngleLabels,
+    incline_deg: inclineDeg,
+    warning: warning || undefined,
     bodies,
     surfaces,
     connectors,
@@ -2020,6 +2052,17 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     return {
       __path: "/plot",
       expr: String(args.expr || ""),
+      pieces: ensureArray<unknown>(args.pieces).map((item) => {
+        const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+        return {
+          expr: String(record.expr || ""),
+          x_min: parseNumber(record.x_min, -10),
+          x_max: parseNumber(record.x_max, 10),
+          label: limitText(record.label, "", MAX_LABEL_LENGTH),
+          name: limitText(record.name, "", MAX_LABEL_LENGTH),
+          color: limitText(record.color, "", 32),
+        };
+      }),
       x_min: parseNumber(args.x_min, -10),
       x_max: parseNumber(args.x_max, 10),
       points: parseInteger(args.points, 1000),
@@ -2115,6 +2158,8 @@ async function storeShortLink(env: Env, path: string, payload: Record<string, un
 }
 
 async function buildShortUrl(env: Env, path: string, payload: Record<string, unknown>, origin: string) {
+  const packed = await toCompressedBase64UrlFromJson(payload);
+  if (packed.length <= 3600) return `${origin}${path}?d=${packed}`;
   const token = await storeShortLink(env, path, payload);
   return shortLinkUrl(origin, token);
 }
@@ -2363,6 +2408,45 @@ function buildTeachingPlotPayload(args: Record<string, unknown>): Record<string,
       ] : [],
     }, "/plot_series");
   }
+  if (topic === "energy_conservation") {
+    const height = parseNumber(params.height, 10);
+    const g = Math.max(0.1, parseNumber(params.g, 9.8));
+    const total = g * height;
+    return normalizePayload({
+      exprs: [`${g}*(${height}-x)`, `${g}*x`, `${total}`],
+      labels: ["重力势能 Ep", "动能 Ek", "机械能 E"],
+      x_min: 0,
+      x_max: height,
+      points: parseInteger(params.points, 1200),
+      title: title === "Teaching template" ? "机械能守恒：势能与动能转换" : title,
+      xlabel: "下落距离 s",
+      ylabel: "单位质量能量",
+      annotations: highlight ? [
+        { kind: "label", x: height * 0.15, y: total * 0.95, text: "总机械能保持不变", color: "#16a34a" },
+        { kind: "point", x: height / 2, y: total / 2, label: "Ep=Ek", color: "#dc2626" },
+      ] : [],
+    }, "/plot_multi");
+  }
+  if (topic === "band_gap") {
+    const gap = Math.max(0, parseNumber(params.gap, 1.1));
+    const valenceTop = 0;
+    const conductionBottom = gap;
+    return normalizePayload({
+      series: [
+        { name: "价带 Ev", type: "line", color: "#2563eb", points: [[0, valenceTop], [1, valenceTop]] },
+        { name: "导带 Ec", type: "line", color: "#dc2626", points: [[0, conductionBottom], [1, conductionBottom]] },
+        { name: "费米能级 Ef", type: "line", color: "#16a34a", points: [[0, gap / 2], [1, gap / 2]] },
+      ],
+      title: title === "Teaching template" ? "半导体能带图：带隙 Eg" : title,
+      xlabel: "k 空间示意",
+      ylabel: "能量 E",
+      annotations: highlight ? [
+        { kind: "area", x_min: 0, x_max: 1, label: `禁带 Eg=${gap.toFixed(2)} eV`, color: "#f97316", opacity: 0.12 },
+        { kind: "label", x: 0.12, y: conductionBottom + 0.12, text: "导带", color: "#dc2626" },
+        { kind: "label", x: 0.12, y: valenceTop - 0.12, text: "价带", color: "#2563eb" },
+      ] : [],
+    }, "/plot_series");
+  }
   const a = parseNumber(params.a, 1);
   const h = parseNumber(params.h, 0);
   const k = parseNumber(params.k, 0);
@@ -2554,7 +2638,7 @@ function buildCStructLayoutPayload(args: Record<string, unknown>, stage = "layou
     if (tailPadding > 0) offset += tailPadding;
     blocks.push({ name: "sizeof", type: "总大小", value: `${offset}B`, address: "", bytes: [`${offset} 字节`], note: "结构体数组要求每个元素起始地址也满足最大对齐" });
   }
-  return sanitizeCMemoryPayload({ title: "C 结构体内存布局与 padding", blocks });
+  return sanitizeCMemoryPayload({ title: "C 结构体内存布局与 padding / sizeof", blocks });
 }
 
 async function buildTeachingTemplate(args: Record<string, unknown>, env: Env, origin: string) {
@@ -2585,6 +2669,56 @@ async function buildTeachingTemplate(args: Record<string, unknown>, env: Env, or
 
 async function buildTeachingSequence(args: Record<string, unknown>, env: Env, origin: string) {
   const topic = limitText(args.topic, "rc_charging", 32);
+  if (topic === "parabola") {
+    const params = getTeachingParams(args);
+    const a = parseNumber(params.a, 1);
+    const h = parseNumber(params.h, 0);
+    const k = parseNumber(params.k, 0);
+    const base = buildTeachingPlotPayload({ ...args, params: { ...params, a, h, k }, title: "1. 抛物线图像" });
+    const vertex = normalizePayload({
+      expr: `${a}*(x-${h})^2+${k}`,
+      x_min: parseNumber(params.x_min, h - 6),
+      x_max: parseNumber(params.x_max, h + 6),
+      points: parseInteger(params.points, 1200),
+      title: "2. 顶点与对称轴",
+      xlabel: "x",
+      ylabel: "y",
+      annotations: [
+        { kind: "vertical_line", x: h, label: `x=${h}`, color: "#7c3aed" },
+        { kind: "point", x: h, y: k, label: `V(${h},${k})`, color: "#dc2626" },
+      ],
+    }, "/plot");
+    const items = [
+      { title: "1. 抛物线图像", kind: "plot", png_url: await buildShortUrl(env, "/png", base, origin), explanation: "先看开口方向、顶点位置和整体平移。", payload: base },
+      { title: "2. 顶点与对称轴", kind: "plot", png_url: await buildShortUrl(env, "/png", vertex, origin), explanation: "顶点决定最值点，对称轴穿过顶点。", payload: vertex },
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Parabola sequence", MAX_TITLE_LENGTH), warnings: [], count: items.length, items };
+  }
+  if (topic === "definite_integral") {
+    const params = getTeachingParams(args);
+    const expr = limitText(params.expr, "x^2", MAX_EXPR_LENGTH);
+    const xMin = parseNumber(params.x_min, 0);
+    const xMax = parseNumber(params.x_max, 3);
+    const accumulation = normalizePayload({
+      expr,
+      x_min: xMin,
+      x_max: xMax,
+      points: parseInteger(params.points, 1200),
+      title: "2. 面积累加的含义",
+      xlabel: "x",
+      ylabel: "f(x)",
+      annotations: [
+        { kind: "area", x_min: xMin, x_max: xMax, label: `∫[${xMin},${xMax}] f(x)dx`, color: "rgba(59,130,246,0.18)", opacity: 0.28 },
+        { kind: "label", x: (xMin + xMax) / 2, y: Math.max(1, ((xMax - xMin) * 0.6)), text: `区间[${xMin},${xMax}]上的累计面积`, color: "#1d4ed8" },
+      ],
+    }, "/plot");
+    const area = buildTeachingPlotPayload({ ...args, params: { ...params, expr, x_min: xMin, x_max: xMax }, title: "1. 曲线与积分区间" });
+    const items = [
+      { title: "1. 曲线与积分区间", kind: "plot", png_url: await buildShortUrl(env, "/png", area, origin), explanation: "先固定上下限，明确哪一段曲线下面的面积在被累加。", payload: area },
+      { title: "2. 面积累加的含义", kind: "plot", png_url: await buildShortUrl(env, "/png", accumulation, origin), explanation: "定积分表示区间内函数值对自变量累计后的总效果。", payload: accumulation },
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Definite integral sequence", MAX_TITLE_LENGTH), warnings: [], count: items.length, items };
+  }
   if (topic === "tangent_derivative") {
     const params = getTeachingParams(args);
     const x0 = parseNumber(params.x0, 1);
@@ -2686,6 +2820,36 @@ async function buildTeachingSequence(args: Record<string, unknown>, env: Env, or
       payload,
     })));
     return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "C struct layout sequence", MAX_TITLE_LENGTH), warnings: items.flatMap((item) => item.warnings), count: items.length, items };
+  }
+  if (topic === "energy_conservation") {
+    const energy = buildTeachingPlotPayload(args);
+    const params = getTeachingParams(args);
+    const height = parseNumber(params.height, 10);
+    const g = Math.max(0.1, parseNumber(params.g, 9.8));
+    const velocity = normalizePayload({
+      expr: `sqrt(2*${g}*x)`,
+      x_min: 0,
+      x_max: height,
+      points: 1200,
+      title: "由能量守恒推出速度",
+      xlabel: "下落距离 s",
+      ylabel: "速度 v",
+      annotations: [{ kind: "label", x: height * 0.35, y: Math.sqrt(2 * g * height) * 0.7, text: "v=sqrt(2gs)", color: "#7c3aed" }],
+    }, "/plot");
+    const items = [
+      { title: "1. 能量转换", kind: "plot", png_url: await buildShortUrl(env, "/png", energy, origin), explanation: "势能减少量等于动能增加量，总机械能不变。", payload: energy },
+      { title: "2. 速度随下落距离变化", kind: "plot", png_url: await buildShortUrl(env, "/png", velocity, origin), explanation: "忽略阻力时，下落越远速度越大。", payload: velocity },
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Energy conservation sequence", MAX_TITLE_LENGTH), warnings: [], count: items.length, items };
+  }
+  if (topic === "band_gap") {
+    const semiconductor = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: parseNumber(getTeachingParams(args).gap, 1.1) }, title: "1. 半导体" });
+    const conductor = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: 0 }, title: "2. 导体：无明显禁带" });
+    const insulator = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: 5 }, title: "3. 绝缘体：宽禁带" });
+    const payloads = [semiconductor, conductor, insulator];
+    const explanations = ["半导体带隙适中，热激发或掺杂可产生载流子。", "导体价带与导带重叠或禁带近似为零。", "绝缘体带隙很宽，常温下难以激发载流子。"];
+    const items = await Promise.all(payloads.map(async (payload, index) => ({ title: String(payload.title), kind: "plot", png_url: await buildShortUrl(env, "/png", payload, origin), explanation: explanations[index], payload })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Band gap sequence", MAX_TITLE_LENGTH), warnings: [], count: items.length, items };
   }
   if (topic === "venn_probability") {
     const payloads = [
@@ -2868,6 +3032,25 @@ export default {
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
       return Response.json(healthResult(url.origin), { headers: corsHeaders() });
+    }
+
+    if (req.method === "GET" && url.pathname === "/plot") {
+      try {
+        const packed = url.searchParams.get("d") || "";
+        if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
+        const payload = await parseCompressedBase64UrlJson<Record<string, unknown>>(packed);
+        const spec = buildSpecFromPayload(payload);
+        return new Response(renderPlotSvg(spec), {
+          status: 200,
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "public, max-age=300",
+            "access-control-allow-origin": "*",
+          },
+        });
+      } catch (error) {
+        return Response.json({ ok: false, error: "bad_plot_query", message: String((error as Error)?.message || error) }, { status: 400, headers: corsHeaders() });
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/png") {

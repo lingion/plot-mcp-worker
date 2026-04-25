@@ -28,6 +28,17 @@ const DIAGRAM_OPACITY = {
   frame: 0.95,
 };
 
+const FORCE_LABEL_CHIP = {
+  fill: "rgba(251,253,255,0.9)",
+  stroke: "rgba(226,232,240,0.95)",
+  shadow: "rgba(148,163,184,0.16)",
+  sheen: "rgba(255,255,255,0.72)",
+  paddingX: 7,
+  paddingY: 4,
+  radius: 8,
+  leaderInset: 3,
+};
+
 function makeSvgShell(width: number, height: number, title: string, body: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -57,14 +68,26 @@ function polarPoint(cx: number, cy: number, radius: number, angleDeg: number) {
   };
 }
 
-function vectorLabelPosition(x: number, y: number, dx: number, dy: number, index: number, groupIndex = 0, groupSize = 1, radialPadding = 0) {
+function vectorLabelPosition(
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  index: number,
+  groupIndex = 0,
+  groupSize = 1,
+  radialPadding = 0,
+  ringIndex = 0,
+  ringCount = 1,
+) {
   const length = Math.hypot(dx, dy) || 1;
   const nx = dx / length;
   const ny = dy / length;
   const spread = groupSize > 1 ? 18 : 12;
   const normalDirection = groupIndex - (groupSize - 1) / 2;
-  const lateralOffset = spread * normalDirection + ((index % 2) === 0 ? 4 : -4);
-  const alongOffset = radialPadding + (groupSize > 1 ? 20 : 14);
+  const ringOffset = ringCount > 1 ? (ringIndex - (ringCount - 1) / 2) * 16 : 0;
+  const lateralOffset = spread * normalDirection + ringOffset + ((index % 2) === 0 ? 4 : -4);
+  const alongOffset = radialPadding + (groupSize > 1 ? 20 : 14) + ringIndex * 10;
   return {
     x: x + dx + nx * alongOffset + (-ny * lateralOffset),
     y: y - dy - ny * alongOffset + (nx * lateralOffset),
@@ -342,13 +365,235 @@ type ForceGroupMeta = {
   startY: number;
   dx: number;
   dy: number;
+  rawLabel: string;
+  labelX: number;
+  labelY: number;
+  labelText: string;
+  labelAnchor: "start" | "middle" | "end";
+  color: string;
+  side: "left" | "right" | "center";
+  endX: number;
+  endY: number;
+  connectorLane: number;
+  columnBoundShift: number;
 };
+
+function compactForceLabelText(text: string, maxWidth: number) {
+  const plain = String(text || "").trim();
+  if (!plain) return "";
+  if (estimateTextWidth(plain, DIAGRAM_TYPE.body, 1.1) <= maxWidth) return plain;
+  let compact = plain;
+  while (compact.length > 1 && estimateTextWidth(`${compact}…`, DIAGRAM_TYPE.body, 1.1) > maxWidth) {
+    compact = compact.slice(0, -1).trimEnd();
+  }
+  return `${compact || plain[0]}…`;
+}
+
+function forceLabelMaxWidth(side: ForceGroupMeta["side"]) {
+  if (side === "left") return 88;
+  if (side === "right") return 96;
+  return 84;
+}
+
+function forceLabelChipPadding(item: Pick<ForceGroupMeta, "side">) {
+  if (item.side === "left") return { left: 6, right: 9, top: 4, bottom: 4 };
+  if (item.side === "right") return { left: 9, right: 6, top: 4, bottom: 4 };
+  return { left: 7, right: 7, top: 4, bottom: 4 };
+}
+
+function forceLabelChipRect(item: ForceGroupMeta) {
+  const padding = forceLabelChipPadding(item);
+  const textWidth = estimateTextWidth(item.labelText, DIAGRAM_TYPE.body, 1.1);
+  const width = textWidth + padding.left + padding.right;
+  const height = DIAGRAM_TYPE.body + padding.top + padding.bottom;
+  const anchorX = item.labelAnchor === "start"
+    ? item.labelX - padding.left
+    : item.labelAnchor === "end"
+      ? item.labelX - textWidth - padding.right
+      : item.labelX - width / 2;
+  const x = anchorX;
+  const y = item.labelY - DIAGRAM_TYPE.body + 1 - padding.top;
+  return { x, y, width, height };
+}
+
+function forceLabelLeaderAnchor(item: ForceGroupMeta) {
+  const rect = forceLabelChipRect(item);
+  const centerY = rect.y + rect.height / 2;
+  if (item.labelAnchor === "start") {
+    return { x: rect.x - FORCE_LABEL_CHIP.leaderInset, y: centerY };
+  }
+  if (item.labelAnchor === "end") {
+    return { x: rect.x + rect.width + FORCE_LABEL_CHIP.leaderInset, y: centerY };
+  }
+  const dx = item.endX - item.labelX;
+  const dy = item.endY - item.labelY;
+  if (item.side === "center") {
+    const prefersTopExit = dy < 0;
+    return {
+      x: rect.x + rect.width / 2,
+      y: prefersTopExit ? rect.y - FORCE_LABEL_CHIP.leaderInset : rect.y + rect.height + FORCE_LABEL_CHIP.leaderInset,
+    };
+  }
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return {
+      x: dx >= 0 ? rect.x + rect.width + FORCE_LABEL_CHIP.leaderInset : rect.x - FORCE_LABEL_CHIP.leaderInset,
+      y: centerY,
+    };
+  }
+  return {
+    x: rect.x + rect.width / 2,
+    y: dy >= 0 ? rect.y + rect.height + FORCE_LABEL_CHIP.leaderInset : rect.y - FORCE_LABEL_CHIP.leaderInset,
+  };
+}
+
+function renderForceLabelChip(item: ForceGroupMeta) {
+  const rect = forceLabelChipRect(item);
+  const innerWidth = Math.max(10, rect.width - 4);
+  const innerHeight = Math.max(8, Math.min(rect.height - 7, rect.height * 0.42));
+  const widthTightness = Math.max(0, Math.min(1, (rect.width - 54) / 46));
+  const shadowOffsetX = (item.side === "left" ? -1.2 : item.side === "right" ? 1.8 : 0.8) + widthTightness * 0.5;
+  const shadowOffsetY = (item.side === "center" ? 2.4 : 1.8) + widthTightness * 0.35;
+  const sheenOffsetX = (item.side === "left" ? 1.2 : item.side === "right" ? 2.8 : 1.8) + widthTightness * 0.3;
+  const sheenOffsetY = (item.side === "center" ? 1.1 : 1.5) + widthTightness * 0.15;
+  const sheenInset = 2 + widthTightness * 1.4;
+  const sheenWidth = Math.max(9, innerWidth - (item.side === "center" ? 6 : item.side === "left" ? 8 : 2) - widthTightness * 4);
+  const sheenHeight = Math.max(7, innerHeight - (item.side === "center" ? 1 : 0) - widthTightness * 0.8);
+  const sheenRadius = Math.max(4, FORCE_LABEL_CHIP.radius - 3 - widthTightness * 0.6);
+  return [
+    `<rect x="${rect.x + shadowOffsetX}" y="${rect.y + shadowOffsetY}" width="${rect.width}" height="${rect.height}" rx="${FORCE_LABEL_CHIP.radius}" fill="${FORCE_LABEL_CHIP.shadow}" opacity="0.9" />`,
+    `<rect x="${rect.x}" y="${rect.y}" width="${rect.width}" height="${rect.height}" rx="${FORCE_LABEL_CHIP.radius}" fill="${FORCE_LABEL_CHIP.fill}" stroke="${FORCE_LABEL_CHIP.stroke}" stroke-width="0.9" />`,
+    `<rect x="${rect.x + sheenOffsetX + sheenInset * 0.15}" y="${rect.y + sheenOffsetY}" width="${sheenWidth}" height="${sheenHeight}" rx="${sheenRadius}" fill="${FORCE_LABEL_CHIP.sheen}" opacity="0.85" />`,
+  ].join("");
+}
+
+function renderForceLabelConnector(item: ForceGroupMeta, anchorX: number, anchorY: number) {
+  const rect = forceLabelChipRect(item);
+  const dx = anchorX - item.endX;
+  const dy = anchorY - item.endY;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= 10) return "";
+  const widthTightness = Math.max(0, Math.min(1, (rect.width - 54) / 46));
+  const boundCompression = Math.max(0, Math.min(1, Math.abs(item.columnBoundShift) / 24));
+  const centerRhythm = item.side === "center" ? Math.min(1, item.connectorLane / 3) : 0;
+  const step = Math.min(16 + widthTightness * 4 - boundCompression * 2.2 + centerRhythm * 1.6, Math.max(8, distance * (0.18 + widthTightness * 0.04 - boundCompression * 0.03 + centerRhythm * 0.02)));
+  const laneOffset = item.side === "center" ? item.connectorLane * (4.5 + widthTightness * 1.2) : item.connectorLane * (7 + widthTightness * 2.5 - boundCompression * 1.8);
+  const exitX = item.endX + (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx || 1) * step : 0);
+  const exitY = item.endY + (Math.abs(dy) > Math.abs(dx) ? Math.sign(dy || 1) * step : 0);
+  const midX = item.side === "center"
+    ? anchorX + ((item.connectorLane % 2 === 0 ? -1 : 1) * laneOffset)
+    : exitX + (item.side === "right" ? laneOffset : -laneOffset);
+  const midY = item.side === "center"
+    ? exitY + laneOffset * (0.55 + centerRhythm * 0.18)
+    : anchorY - laneOffset * (0.35 - widthTightness * 0.08 + boundCompression * 0.05);
+  const tailDx = anchorX - midX;
+  const tailDy = anchorY - midY;
+  const tailLength = Math.hypot(tailDx, tailDy) || 1;
+  const connectorGap = Math.min(7 + widthTightness - boundCompression * 0.6, Math.max(3.5, tailLength * (0.18 - widthTightness * 0.04 + boundCompression * 0.02)));
+  const endX = anchorX - tailDx / tailLength * connectorGap;
+  const endY = anchorY - tailDy / tailLength * connectorGap;
+  return `<polyline points="${item.endX},${item.endY} ${midX},${midY} ${endX},${endY}" fill="none" stroke="${item.color}" stroke-width="1" stroke-dasharray="3 3" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />`;
+}
+
+function assignForceConnectorLanes(items: ForceGroupMeta[]) {
+  const laneCountBySide = new Map<ForceGroupMeta["side"], number>();
+  return items.map((item) => {
+    const lane = laneCountBySide.get(item.side) || 0;
+    laneCountBySide.set(item.side, lane + 1);
+    return { ...item, connectorLane: lane };
+  });
+}
+
+function coordinateForceLabelColumns(items: ForceGroupMeta[]) {
+  const widthTargetBySide = new Map<ForceGroupMeta["side"], number>();
+  (["left", "right"] as const).forEach((side) => {
+    const sideItems = items.filter((item) => item.side === side);
+    if (sideItems.length < 2) return;
+    const widths = sideItems.map((item) => estimateTextWidth(item.labelText, DIAGRAM_TYPE.body, 1.1));
+    const target = Math.min(Math.max(...widths), Math.max(...widths.slice().sort((a, b) => a - b).slice(0, Math.max(1, widths.length - 1))) + 10);
+    widthTargetBySide.set(side, target);
+  });
+  return items.map((item) => {
+    const target = widthTargetBySide.get(item.side);
+    if (!target) return item;
+    const compactLabel = compactForceLabelText(item.rawLabel, target);
+    return { ...item, labelText: escapeXml(compactLabel) };
+  });
+}
+
+function adjustForceLabelPositions(items: ForceGroupMeta[]) {
+  const minGap = 8;
+  const adjustedBySide = new Map<ForceGroupMeta["side"], ForceGroupMeta[]>();
+
+  (["left", "center", "right"] as const).forEach((side) => {
+    const sorted = items
+      .filter((item) => item.side === side)
+      .sort((a, b) => a.labelY - b.labelY);
+    const adjusted: ForceGroupMeta[] = [];
+    const columnLimit = side === "left" ? 214 : side === "right" ? 426 : null;
+    sorted.forEach((item) => {
+      const previous = adjusted[adjusted.length - 1];
+      let nextY = item.labelY;
+      let nextX = item.labelX;
+      if (previous) {
+        const previousRect = forceLabelChipRect(previous);
+        let nextRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+        const horizontalOverlap = Math.min(previousRect.x + previousRect.width, nextRect.x + nextRect.width) - Math.max(previousRect.x, nextRect.x);
+        const verticalOverlap = Math.min(previousRect.y + previousRect.height, nextRect.y + nextRect.height) - Math.max(previousRect.y, nextRect.y);
+        const sideMinGap = side === "center" ? 12 : minGap;
+        if (verticalOverlap > -sideMinGap && horizontalOverlap > 0) {
+          nextY += verticalOverlap + sideMinGap;
+          if (side === "center") {
+            nextY += Math.min(8, 2 + adjusted.length * 0.8);
+          } else {
+            const horizontalBump = 12 + Math.min(22, nextRect.width * 0.12);
+            nextX += side === "right" ? horizontalBump : -horizontalBump;
+          }
+          nextRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+          const secondHorizontalOverlap = Math.min(previousRect.x + previousRect.width, nextRect.x + nextRect.width) - Math.max(previousRect.x, nextRect.x);
+          const secondVerticalOverlap = Math.min(previousRect.y + previousRect.height, nextRect.y + nextRect.height) - Math.max(previousRect.y, nextRect.y);
+          if (secondHorizontalOverlap > 0 && secondVerticalOverlap > -sideMinGap) {
+            nextY += secondVerticalOverlap + sideMinGap;
+          }
+        }
+      }
+      let boundShift = 0;
+      if (columnLimit !== null) {
+        const boundedRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+        if (side === "left") {
+          const overflow = boundedRect.x - columnLimit;
+          if (overflow > 0) {
+            nextX -= overflow;
+            boundShift = overflow;
+          }
+        } else {
+          const overflow = columnLimit - (boundedRect.x + boundedRect.width);
+          if (overflow > 0) {
+            nextX += overflow;
+            boundShift = overflow;
+          }
+        }
+      }
+      adjusted.push({ ...item, labelX: nextX, labelY: nextY, columnBoundShift: boundShift });
+    });
+    adjustedBySide.set(side, adjusted);
+  });
+
+  const indexBySignature = new Map<string, ForceGroupMeta>();
+  adjustedBySide.forEach((group) => {
+    group.forEach((item) => {
+      indexBySignature.set(`${item.endX}:${item.endY}:${item.labelText}`, item);
+    });
+  });
+
+  return items.map((item) => indexBySignature.get(`${item.endX}:${item.endY}:${item.labelText}`) || item);
+}
 
 type RenderForceContext = {
   inclineDeg?: number;
   preferLocalAngles?: boolean;
   annotateIncline?: boolean;
   suppressGlobalAxes?: boolean;
+  compactMode?: boolean;
 };
 
 function forceReferenceAngle(angleDeg: number, inclineDeg: number) {
@@ -415,40 +660,92 @@ function renderBodyForces(
   const angleGroups = buildAngleGroups(forces);
   const groupOrder = new Map<number, number>();
   const metaByIndex = new Map<number, ForceGroupMeta>();
+  const pendingLabels: ForceGroupMeta[] = [];
+  const compactMode = Boolean(context.compactMode);
+  const bodyCenter = compactMode ? { x, y } : null;
+  const ringCount = compactMode ? Math.max(1, Math.ceil(forces.length / 2)) : 1;
 
   forces.forEach((force, index) => {
     const angleDeg = Number(force.angle_deg || 0);
     const angle = angleDeg * Math.PI / 180;
     const magnitude = Math.max(0.5, Number(force.magnitude || 1));
     const color = escapeXml(String(force.color || "#1d4ed8"));
-    const label = escapeXml(String(force.label || "F"));
+    const rawLabel = String(force.label || "F");
     const normalized = ((angleDeg % 360) + 360) % 360;
     const groupKey = Math.round(normalized / 12);
     const group = angleGroups.get(groupKey) || [index];
     const groupIndex = groupOrder.get(groupKey) || 0;
     groupOrder.set(groupKey, groupIndex + 1);
+    const ringIndex = compactMode ? Math.floor(index / 2) : 0;
     const lateralBase = context.preferLocalAngles ? 16 : 12;
     const lateralShift = group.length > 1 ? (groupIndex - (group.length - 1) / 2) * lateralBase : 0;
+    const unitX = Math.cos(angle);
+    const unitY = Math.sin(angle);
+    const normalX = -Math.sin(angle);
+    const normalY = -Math.cos(angle);
+    const contactRadius = compactMode
+      ? bodyContactDistance(body, { x: unitX, y: unitY }) + 6
+      : 0;
     const startX = x;
     const startY = y;
     const length = vectorLengthScale(magnitude, maxMagnitude);
-    const dx = Math.cos(angle) * length;
-    const dy = Math.sin(angle) * length;
+    const shaftLength = Math.max(18, length - contactRadius);
+    const dx = Math.cos(angle) * shaftLength;
+    const dy = Math.sin(angle) * shaftLength;
     const x2 = startX + dx;
     const y2 = startY - dy;
-    const labelBaseX = x + -Math.sin(angle) * lateralShift;
-    const labelBaseY = y + -Math.cos(angle) * lateralShift;
-    const labelPos = vectorLabelPosition(labelBaseX, labelBaseY, dx, dy, index, groupIndex, group.length, context.preferLocalAngles ? 10 : 6);
+    const tipX = x + unitX * length + normalX * lateralShift;
+    const tipY = y - unitY * length + normalY * lateralShift;
+    const labelPos = vectorLabelPosition(
+      startX,
+      startY,
+      tipX - startX,
+      startY - tipY,
+      index,
+      groupIndex,
+      group.length,
+      contactRadius,
+      ringIndex,
+      ringCount,
+    );
     const labelAnchor = vectorLabelAnchor(dx, dy);
+    const side = labelAnchor === "start" ? "right" : labelAnchor === "end" ? "left" : "center";
+    const label = escapeXml(compactMode ? compactForceLabelText(rawLabel, forceLabelMaxWidth(side)) : rawLabel);
     sumX += dx;
     sumY += dy;
-    metaByIndex.set(index, { groupIndex, groupSize: group.length, startX, startY, dx, dy });
-    vectorLines.push(`<line x1="${startX}" y1="${startY}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />`);
-    vectorLines.push(`<text x="${labelPos.x}" y="${labelPos.y}" text-anchor="${labelAnchor}" font-size="${DIAGRAM_TYPE.body}" font-weight="600" fill="${color}">${label}</text>`);
+    const meta = { groupIndex, groupSize: group.length, startX, startY, dx: tipX - startX, dy: startY - tipY, rawLabel, labelX: labelPos.x, labelY: labelPos.y, labelText: label, labelAnchor, color, side, endX: x2, endY: y2, connectorLane: 0, columnBoundShift: 0 } satisfies ForceGroupMeta;
+    metaByIndex.set(index, meta);
+    pendingLabels.push(meta);
+    if (bodyCenter) {
+      vectorLines.push(`<line x1="${bodyCenter.x}" y1="${bodyCenter.y}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />`);
+      if (contactRadius > 0) {
+        vectorLines.push(`<line x1="${x2}" y1="${y2}" x2="${tipX}" y2="${tipY}" stroke="${color}" stroke-width="1.2" opacity="0.28" />`);
+      }
+    } else {
+      vectorLines.push(`<line x1="${startX}" y1="${startY}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />`);
+    }
     if (showComponents && (group.length === 1 || groupIndex === 0)) {
       helperLines.push(`<line x1="${startX}" y1="${startY}" x2="${x2}" y2="${startY}" stroke="${color}" stroke-width="${DIAGRAM_STROKES.helper}" stroke-dasharray="4 4" opacity="${componentOpacity}" />`);
       helperLines.push(`<line x1="${x2}" y1="${startY}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${DIAGRAM_STROKES.helper}" stroke-dasharray="4 4" opacity="${componentOpacity}" />`);
     }
+  });
+
+  const placedLabels = compactMode ? assignForceConnectorLanes(adjustForceLabelPositions(coordinateForceLabelColumns(pendingLabels))) : pendingLabels;
+  placedLabels.forEach((item) => {
+    const chipAnchor = compactMode ? forceLabelLeaderAnchor(item) : null;
+    const anchorX = chipAnchor ? chipAnchor.x : item.labelAnchor === "start"
+      ? item.labelX - 4
+      : item.labelAnchor === "end"
+        ? item.labelX + 4
+        : item.labelX;
+    const anchorY = chipAnchor ? chipAnchor.y : item.labelY - 5;
+    if (compactMode && (Math.abs(anchorX - item.endX) > 10 || Math.abs(anchorY - item.endY) > 10)) {
+      vectorLines.push(renderForceLabelConnector(item, anchorX, anchorY));
+    }
+    if (compactMode) {
+      vectorLines.push(renderForceLabelChip(item));
+    }
+    vectorLines.push(`<text x="${item.labelX}" y="${item.labelY}" text-anchor="${item.labelAnchor}" font-size="${DIAGRAM_TYPE.body}" font-weight="600" fill="${item.color}">${item.labelText}</text>`);
   });
 
   if (showAngleLabels) {
@@ -475,11 +772,13 @@ function renderBodyForces(
       const angleDeg = Number(force.angle_deg || 0);
       const meta = metaByIndex.get(index);
       if (!meta || (meta.groupSize > 1 && meta.groupIndex > 0)) return;
+      const angleOriginX = compactMode ? meta.startX : x;
+      const angleOriginY = compactMode ? meta.startY : y;
       if (preferLocalAngles) {
         const reference = forceReferenceAngle(angleDeg, inclineDeg);
         annotationLines.push(renderAngleAnnotation(
-          x,
-          y,
+          angleOriginX,
+          angleOriginY,
           reference.startDeg,
           angleDeg,
           30 + annotationIndex * 12,
@@ -489,8 +788,8 @@ function renderBodyForces(
         return;
       }
       annotationLines.push(renderAngleAnnotation(
-        x,
-        y,
+        angleOriginX,
+        angleOriginY,
         0,
         angleDeg,
         28 + annotationIndex * 12,
@@ -506,7 +805,7 @@ function renderBodyForces(
 export function renderForceDiagramSvg(payload: Record<string, unknown>): string {
   const bodyLabel = escapeXml(String(payload.body_label || "m"));
   const forces = Array.isArray(payload.forces) ? payload.forces as Array<Record<string, unknown>> : [];
-  const showComponents = Boolean(payload.show_components);
+  const showComponents = payload.show_components !== false;
   const cx = 260;
   const cy = 220;
   const scale = 38;
@@ -551,6 +850,8 @@ export function renderForceAnalysisSvg(payload: Record<string, unknown>): string
     : [{ x: 320, y: 250, label: String(payload.body_label || "m"), kind: "particle", forces: Array.isArray(payload.forces) ? payload.forces : [] }];
   const surfaces = Array.isArray(payload.surfaces) ? payload.surfaces as Array<Record<string, unknown>> : [];
   const connectors = Array.isArray(payload.connectors) ? payload.connectors as Array<Record<string, unknown>> : [];
+  const totalForces = bodies.reduce((sum, body) => sum + ((Array.isArray(body.forces) ? body.forces.length : 0)), 0);
+  const compactMode = totalForces >= 5 || (preferLocalAngles && bodies.some((body) => Array.isArray(body.forces) && body.forces.length >= 4));
   const backgroundParts: string[] = [];
   const sceneParts: string[] = [];
   const helperLines: string[] = [];
@@ -575,7 +876,7 @@ export function renderForceAnalysisSvg(payload: Record<string, unknown>): string
     const y2 = 380 - Math.tan(inclineRad) * 300;
     sceneParts.push(renderForceSurface({ kind: "incline", x1, y1, x2, y2, label: "" }));
     if (showAngleLabels) {
-      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, 32, `${Math.round(incline)}°`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary }));
+      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, compactMode ? 26 : 32, `${Math.round(incline)}°`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary }));
     }
   }
 
@@ -584,7 +885,7 @@ export function renderForceAnalysisSvg(payload: Record<string, unknown>): string
     if (showAngleLabels && preferLocalAngles && String(surface.kind || "") === "incline") {
       const x1 = Number(surface.x1 || 0);
       const y1 = Number(surface.y1 || 0);
-      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, 30, `${Math.round(incline)}°`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary, textSize: 11.5 }));
+      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, compactMode ? 24 : 30, `${Math.round(incline)}°`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary, textSize: 11.5 }));
     }
   });
   connectors.forEach((connector) => {
@@ -599,6 +900,7 @@ export function renderForceAnalysisSvg(payload: Record<string, unknown>): string
       preferLocalAngles,
       annotateIncline: preferLocalAngles,
       suppressGlobalAxes: preferLocalAngles,
+      compactMode,
     });
     helperLines.push(...rendered.helperLines);
     annotationLines.push(...rendered.annotationLines);
@@ -615,12 +917,22 @@ export function renderForceAnalysisSvg(payload: Record<string, unknown>): string
     vectorLines.push(`<text x="${rx + 10}" y="${ry - 10}" font-size="14" font-weight="700" fill="${DIAGRAM_COLORS.primary}">R</text>`);
   }
 
+  const warning = String(payload.warning || "").trim();
+  const warningLines = compactMode && warning
+    ? wrapDiagramText(`已自动简化：${warning}`, width - 136, DIAGRAM_TYPE.small)
+    : [];
+  const warningPanel = warningLines.length > 0
+    ? `<rect x="24" y="452" width="652" height="${28 + warningLines.length * 16}" fill="#fff7ed" stroke="#fdba74" stroke-width="0.9" rx="5" />
+      ${warningLines.map((line, index) => `<text x="38" y="${472 + index * 16}" font-size="${DIAGRAM_TYPE.small}" font-weight="${index === 0 ? 600 : 500}" fill="#9a3412">${escapeXml(line)}</text>`).join("\n")}`
+    : "";
+
   return makeSvgShell(width, height, title, `
   ${backgroundParts.join("\n")}
   ${sceneParts.join("\n")}
   ${helperLines.join("\n")}
   ${annotationLines.join("\n")}
   ${vectorLines.join("\n")}
+  ${warningPanel}
   `);
 }
 
@@ -786,6 +1098,28 @@ function circuitWireBounds(wire: Record<string, unknown>) {
     ));
   }
   return expandBounds(bounds, 3);
+}
+
+function resolveCircuitWireEndpoint(
+  components: Array<Record<string, unknown>>,
+  x: number,
+  y: number,
+  otherX: number,
+  otherY: number,
+) {
+  for (const component of components) {
+    const anchor = componentAnchor(component);
+    const withinX = x >= anchor.x - anchor.metrics.left - 1 && x <= anchor.x + anchor.metrics.right + 1;
+    const withinY = y >= anchor.y - anchor.metrics.top - 1 && y <= anchor.y + anchor.metrics.bottom + 1;
+    if (!withinX || !withinY) continue;
+    const dx = otherX - anchor.x;
+    const dy = otherY - anchor.y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx < 0 ? anchor.anchors.left : anchor.anchors.right;
+    }
+    return dy < 0 ? anchor.anchors.top : anchor.anchors.bottom;
+  }
+  return { x, y };
 }
 
 function renderCircuitComponent(component: Record<string, unknown>) {
@@ -1128,10 +1462,16 @@ export function renderCircuitDiagramSvg(payload: Record<string, unknown>): strin
   const notesHeight = noteLines.length > 0 ? Math.max(76, 28 + noteLines.length * noteLineHeight + 10) : 0;
   const notesX = frameX + frameWidth + 18;
   const wireParts = wires.map((wire) => {
-    const x1 = Number(wire.x1 || 0);
-    const y1 = Number(wire.y1 || 0);
-    const x2 = Number(wire.x2 || 0);
-    const y2 = Number(wire.y2 || 0);
+    const rawX1 = Number(wire.x1 || 0);
+    const rawY1 = Number(wire.y1 || 0);
+    const rawX2 = Number(wire.x2 || 0);
+    const rawY2 = Number(wire.y2 || 0);
+    const start = resolveCircuitWireEndpoint(components, rawX1, rawY1, rawX2, rawY2);
+    const end = resolveCircuitWireEndpoint(components, rawX2, rawY2, rawX1, rawY1);
+    const x1 = start.x;
+    const y1 = start.y;
+    const x2 = end.x;
+    const y2 = end.y;
     const labelText = String(wire.label || "");
     const label = escapeXml(labelText);
     const labelPos = circuitWireLabelPosition(x1, y1, x2, y2, labelText);

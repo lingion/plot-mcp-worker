@@ -46,6 +46,14 @@ const parser = new Parser({
   },
 });
 
+type PiecewiseSegment = {
+  expr: string;
+  xMin: number;
+  xMax: number;
+  name?: string;
+  color?: string;
+};
+
 function normalizePoints(rawPoints: Array<[number, number] | number[] | { x: unknown; y: unknown }>): PlotPoint[] {
   if (!Array.isArray(rawPoints) || rawPoints.length === 0) {
     throw new Error("series points must be a non-empty array");
@@ -141,17 +149,19 @@ function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation
   };
 }
 
-function makeFunctionSeries(expr: string, points: number, xMin: number, xMax: number, color: string, name: string): NormalizedSeries {
+function parseExpression(expr: string) {
   const normalizedExpr = String(expr).trim();
   if (!normalizedExpr) throw new Error("expr is required");
   if (normalizedExpr.length > MAX_EXPR_LENGTH) throw new Error(`expr is too long (max ${MAX_EXPR_LENGTH})`);
-  let parsed;
   try {
-    parsed = parser.parse(normalizedExpr);
+    return { normalizedExpr, parsed: parser.parse(normalizedExpr) };
   } catch (error) {
     const message = String((error as Error)?.message || error);
     throw new Error(`invalid expression syntax: ${message}`);
   }
+}
+
+function buildFunctionPoints(parsed: ReturnType<Parser["parse"]>, normalizedExpr: string, points: number, xMin: number, xMax: number): PlotPoint[] {
   const safePoints = clamp(parseInteger(points, 1000), MIN_POINTS, MAX_POINTS);
   const step = safePoints <= 1 ? 0 : (xMax - xMin) / (safePoints - 1);
   const result: PlotPoint[] = [];
@@ -162,11 +172,17 @@ function makeFunctionSeries(expr: string, points: number, xMin: number, xMax: nu
       y = Number(parsed.evaluate({ x }));
     } catch (error) {
       const message = String((error as Error)?.message || error);
-      throw new Error(`failed to evaluate expression at x=${x}: ${message}`);
+      throw new Error(`failed to evaluate expression ${normalizedExpr} at x=${x}: ${message}`);
     }
     if (!Number.isFinite(y)) continue;
     result.push({ x, y });
   }
+  return result;
+}
+
+function makeFunctionSeries(expr: string, points: number, xMin: number, xMax: number, color: string, name: string): NormalizedSeries {
+  const { normalizedExpr, parsed } = parseExpression(expr);
+  const result = buildFunctionPoints(parsed, normalizedExpr, points, xMin, xMax);
   if (result.length === 0) {
     throw new Error(`expression ${normalizedExpr} produced no plottable points`);
   }
@@ -178,16 +194,60 @@ function makeFunctionSeries(expr: string, points: number, xMin: number, xMax: nu
   };
 }
 
+function normalizePiecewiseSegments(rawPieces: unknown, globalXMin: number, globalXMax: number): PiecewiseSegment[] {
+  const pieces = ensureArray<unknown>(rawPieces).map((item, index) => {
+    const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+    const expr = String(record.expr || "").trim();
+    const xA = parseNumber(record.x_min, globalXMin);
+    const xB = parseNumber(record.x_max, globalXMax);
+    return {
+      expr,
+      xMin: Math.min(xA, xB),
+      xMax: Math.max(xA, xB),
+      name: record.label === undefined ? (record.name === undefined ? `Piece ${index + 1}` : String(record.name)) : String(record.label),
+      color: typeof record.color === "string" ? record.color : undefined,
+    } satisfies PiecewiseSegment;
+  }).filter((piece) => piece.expr);
+  if (pieces.length === 0) return [];
+  if (pieces.length > MAX_SERIES) throw new Error(`too many piecewise segments (max ${MAX_SERIES})`);
+  pieces.forEach((piece, index) => {
+    if (!(piece.xMax > piece.xMin)) {
+      throw new Error(`piece ${index + 1} must satisfy x_max > x_min`);
+    }
+  });
+  return pieces;
+}
+
+function buildPiecewiseSeries(rawPieces: unknown, points: number, globalXMin: number, globalXMax: number): NormalizedSeries[] {
+  const pieces = normalizePiecewiseSegments(rawPieces, globalXMin, globalXMax);
+  if (pieces.length === 0) {
+    throw new Error("pieces is required when expr is empty");
+  }
+  const totalSpan = pieces.reduce((sum, piece) => sum + (piece.xMax - piece.xMin), 0);
+  const safePoints = clamp(parseInteger(points, 1000), MIN_POINTS, MAX_POINTS);
+  const series = pieces.map((piece, index) => {
+    const span = piece.xMax - piece.xMin;
+    const share = totalSpan <= 0 ? 1 / pieces.length : span / totalSpan;
+    const piecePoints = Math.max(2, Math.round(safePoints * share));
+    return makeFunctionSeries(piece.expr, piecePoints, piece.xMin, piece.xMax, piece.color || DEFAULT_PALETTE[index % DEFAULT_PALETTE.length], piece.name || piece.expr);
+  });
+  if (series.every((item) => item.points.length === 0)) {
+    throw new Error("piecewise function produced no plottable points");
+  }
+  return series;
+}
+
 export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
   const expr = String(args.expr || "").trim();
-  if (!expr) throw new Error("expr is required");
   const xMin = parseNumber(args.x_min, -10);
   const xMax = parseNumber(args.x_max, 10);
   if (!(xMax > xMin)) throw new Error("x_max must be greater than x_min");
   const annotations = normalizeAnnotations(args.annotations);
-  const series = [makeFunctionSeries(expr, parseInteger(args.points, 1000), xMin, xMax, DEFAULT_PALETTE[0], expr)];
+  const series = expr
+    ? [makeFunctionSeries(expr, parseInteger(args.points, 1000), xMin, xMax, DEFAULT_PALETTE[0], expr)]
+    : buildPiecewiseSeries(args.pieces, parseInteger(args.points, 1000), xMin, xMax);
   return {
-    title: safeTitle(args.title, "Function Plot"),
+    title: safeTitle(args.title, expr ? "Function Plot" : "Piecewise Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
     ylabel: safeLabel(args.ylabel, "y"),
     grid: args.grid === undefined ? true : Boolean(args.grid),

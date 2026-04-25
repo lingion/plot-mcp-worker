@@ -5,6 +5,59 @@ import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAU
 import { PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
 
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+  "+": "⁺",
+  "-": "⁻",
+  "(": "⁽",
+  ")": "⁾",
+  "n": "ⁿ",
+  "i": "ⁱ",
+};
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  "0": "₀",
+  "1": "₁",
+  "2": "₂",
+  "3": "₃",
+  "4": "₄",
+  "5": "₅",
+  "6": "₆",
+  "7": "₇",
+  "8": "₈",
+  "9": "₉",
+  "+": "₊",
+  "-": "₋",
+  "(": "₍",
+  ")": "₎",
+  "a": "ₐ",
+  "e": "ₑ",
+  "h": "ₕ",
+  "i": "ᵢ",
+  "j": "ⱼ",
+  "k": "ₖ",
+  "l": "ₗ",
+  "m": "ₘ",
+  "n": "ₙ",
+  "o": "ₒ",
+  "p": "ₚ",
+  "r": "ᵣ",
+  "s": "ₛ",
+  "t": "ₜ",
+  "u": "ᵤ",
+  "v": "ᵥ",
+  "x": "ₓ",
+};
+
 let wasmReady: Promise<void> | null = null;
 
 async function ensureResvgReady() {
@@ -20,6 +73,29 @@ function mapX(x: number, xMin: number, xMax: number, plotX: number, plotWidth: n
 
 function mapY(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number): number {
   return plotY + plotHeight - ((y - yMin) / (yMax - yMin)) * plotHeight;
+}
+
+function toScriptText(text: string, map: Record<string, string>): string {
+  return text.split("").map((char) => map[char] || char).join("");
+}
+
+function formatFormulaText(input: string): string {
+  const normalized = String(input || "").trim();
+  if (!normalized) return "";
+  return normalized
+    .replace(/([A-Za-zα-ωΑ-Ω])_\{([^{}]+)\}/g, (_match, head, sub) => `${head}${toScriptText(sub, SUBSCRIPT_MAP)}`)
+    .replace(/([A-Za-zα-ωΑ-Ω])_([A-Za-z0-9()+-]+)/g, (_match, head, sub) => `${head}${toScriptText(sub, SUBSCRIPT_MAP)}`)
+    .replace(/\^\{([^{}]+)\}/g, (_match, sup) => toScriptText(sup, SUPERSCRIPT_MAP))
+    .replace(/\^([A-Za-z0-9()+-]+)/g, (_match, sup) => toScriptText(sup, SUPERSCRIPT_MAP))
+    .replace(/sqrt\(([^()]+)\)/g, (_match, inner) => `√(${inner})`)
+    .replace(/<=/g, "≤")
+    .replace(/>=/g, "≥")
+    .replace(/!=/g, "≠")
+    .replace(/\*\*/g, "^");
+}
+
+function formulaText(text: string): string {
+  return escapeXml(formatFormulaText(text));
 }
 
 function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
@@ -43,7 +119,7 @@ function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: num
 function renderLegend(spec: PlotSpec, width: number): string {
   return spec.series.map((series, index) => {
     const y = 90 + index * 28;
-    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${escapeXml(series.name)}</text></g>`;
+    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${formulaText(series.name)}</text></g>`;
   }).join("");
 }
 
@@ -59,7 +135,7 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
     const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
     const top = Math.min(y, zeroY);
     const height = Math.max(1, Math.abs(zeroY - y));
-    const label = escapeXml(spec.categories?.[index] || String(index + 1));
+    const label = formulaText(spec.categories?.[index] || String(index + 1));
     return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${spec.series[0].color}" opacity="0.88" rx="6"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text></g>`;
   }).join("");
 }
@@ -87,21 +163,21 @@ function renderAnnotations(spec: PlotSpec, plotX: number, plotY: number, plotWid
     if (!path) return "";
     const labelX = mapX((item.x_min + item.x_max) / 2, spec.xMin, spec.xMax, plotX, plotWidth);
     const labelY = plotY + 28;
-    return `<g><path d="${path}" fill="${item.color}" opacity="${item.opacity}"/><text x="${labelX.toFixed(2)}" y="${labelY}" font-size="17" text-anchor="middle" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+    return `<g><path d="${path}" fill="${item.color}" opacity="${item.opacity}"/><text x="${labelX.toFixed(2)}" y="${labelY}" font-size="17" text-anchor="middle" fill="${item.color}" font-weight="600">${formulaText(item.label)}</text></g>`;
   }).join("");
   const lineLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "vertical_line" }> => item.kind === "vertical_line").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    return `<g><line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${item.color}" stroke-width="2.5" stroke-dasharray="8 7"/><text x="${(x + 8).toFixed(2)}" y="${plotY + 24}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+    return `<g><line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${item.color}" stroke-width="2.5" stroke-dasharray="8 7"/><text x="${(x + 8).toFixed(2)}" y="${plotY + 24}" font-size="17" fill="${item.color}" font-weight="600">${formulaText(item.label)}</text></g>`;
   }).join("");
   const pointLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "point" }> => item.kind === "point").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
     const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
-    return `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="6" fill="${item.color}" stroke="#fff" stroke-width="2"/><text x="${(x + 10).toFixed(2)}" y="${(y - 10).toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+    return `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="6" fill="${item.color}" stroke="#fff" stroke-width="2"/><text x="${(x + 10).toFixed(2)}" y="${(y - 10).toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${formulaText(item.label)}</text></g>`;
   }).join("");
   const labelLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "label" }> => item.kind === "label").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
     const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
-    return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.text)}</text>`;
+    return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${formulaText(item.text)}</text>`;
   }).join("");
   return `${areaLayer}${lineLayer}${pointLayer}${labelLayer}`;
 }
@@ -164,7 +240,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
     text { font-family: ${DEFAULT_FONT_FAMILY}; }
   </style>
   <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
-  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${escapeXml(spec.title)}</text>
+  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
   <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
@@ -174,8 +250,8 @@ export function renderPlotSvg(spec: PlotSpec): string {
   ${annotationLayer}
   ${seriesSvg}
   ${renderLegend(spec, width)}
-  <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${escapeXml(spec.xlabel)}</text>
-  <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${escapeXml(spec.ylabel)}</text>
+  <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${formulaText(spec.xlabel)}</text>
+  <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
 </svg>`;
 }
 

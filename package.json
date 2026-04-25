@@ -7,7 +7,16 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "tsc --noEmit",
-    "test:smoke": "node scripts/smoke.mjs"
+    "test:smoke": "node scripts/smoke.mjs",
+    "probe:force-analysis": "node scripts/local-force-analysis-probe.mjs",
+    "check:force-drift": "node scripts/force-analysis-drift-check.mjs",
+    "check:force-struct": "node scripts/force-analysis-struct-diff.mjs",
+    "check:force-compact": "node scripts/force-analysis-compact-diagnose.mjs",
+    "check:bundle-fingerprint": "node scripts/deploy-bundle-fingerprint.mjs",
+    "check:force-verify": "node scripts/force-analysis-verify.mjs",
+    "check:deploy-preflight": "node scripts/deploy-preflight.mjs",
+    "check:deploy-and-verify": "node scripts/deploy-and-verify.mjs",
+    "check:remote-health": "node scripts/remote-health.mjs"
   },
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2",
