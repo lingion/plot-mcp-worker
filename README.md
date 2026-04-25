@@ -2,11 +2,9 @@
 
 A Cloudflare Worker exposing an MCP (Model Context Protocol) server for mathematical plotting, physics force diagrams, circuit schematics, 3D shape visualization, and bar charts — all rendered server-side and returned as PNG, SVG, or interactive HTML.
 
-**Live endpoint:** `https://plot-mcp.qdp.qzz.io/mcp`
-
 ## What It Does
 
-Plot MCP turns natural language requests into publication-quality images. An AI agent calls one of the tools below, the Worker computes the plot or diagram on the edge, and returns a rendered image or a shareable link.
+Plot MCP turns natural language requests into publication-quality images. An AI agent calls one of the tools below, the Worker computes everything on the edge (no external rendering API), and returns a rendered image or a shareable link.
 
 - **Math plots** — single expression, multi-expression overlays, custom (x,y) series, bar charts
 - **Physics diagrams** — free-body / force analysis SVGs with components, resultants, angles, inclines
@@ -82,7 +80,7 @@ curl http://127.0.0.1:8790/healthz
 npx wrangler deploy
 ```
 
-The Worker is routed through `plot-mcp.qdp.qzz.io/*` and proxies plot rendering to an upstream API at `https://lingion.pythonanywhere.com`.
+The Worker is routed through `plot-mcp.qdp.qzz.io/*`. All rendering happens in-worker — no upstream dependencies.
 
 ## Project Structure
 
@@ -99,9 +97,7 @@ plot-mcp-worker/
 
 Environment variables (set in `wrangler.toml` or Cloudflare dashboard):
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `UPSTREAM_BASE` | Plot rendering API base URL | `https://lingion.pythonanywhere.com` |
+None required. The Worker is fully self-contained.
 
 ## Limits
 
