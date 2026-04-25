@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="520" viewBox="0 0 700 520">
+  <style>text { font-family: PingFang SC, PingFang TC, Hiragino Sans GB, STHeiti, Microsoft YaHei, Noto Sans CJK SC, sans-serif; }</style>
+  <defs>
+    <marker id="forceArrow" markerWidth="4.8" markerHeight="4.8" refX="4.2" refY="2" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,4 L4.2,2 z" fill="#1f2937" />
+    </marker>
+    <marker id="resultantArrow" markerWidth="5.4" markerHeight="5.4" refX="4.8" refY="2.2" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,4.4 L4.8,2.2 z" fill="#111827" />
+    </marker>
+    <marker id="circuitArrow" markerWidth="5" markerHeight="5" refX="4.4" refY="2.2" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,4.4 L4.4,2.2 z" fill="#111827" />
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <text x="24" y="32" font-size="20" font-weight="600" fill="#111827">Block on Incline</text>
+  
+  
+  <line x1="180" y1="380" x2="500" y2="206.79491924311228" stroke="#475569" stroke-width="2.3" stroke-linecap="round" />
+<line x1="180" y1="380" x2="172" y2="390" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="220" y1="358.34936490538905" x2="212" y2="368.34936490538905" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="260" y1="336.69872981077805" x2="252" y2="346.69872981077805" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="300" y1="315.0480947161671" x2="292" y2="325.0480947161671" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="340" y1="293.39745962155615" x2="332" y2="303.39745962155615" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="380" y1="271.74682452694515" x2="372" y2="281.74682452694515" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="420" y1="250.0961894323342" x2="412" y2="260.0961894323342" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="460" y1="228.44555433772325" x2="452" y2="238.44555433772325" stroke="#e2e8f0" stroke-width="0.8" />
+<line x1="500" y1="206.79491924311228" x2="492" y2="216.79491924311228" stroke="#e2e8f0" stroke-width="0.8" />
+<g transform="translate(320 260) rotate(-30)">
+    <rect x="-36" y="-24" width="72" height="48" rx="5" fill="#fbfdff" stroke="#111827" stroke-width="1.9" />
+    <rect x="-29" y="-17" width="58" height="34" rx="4" fill="#ffffff" stroke="#e2e8f0" stroke-width="0.9" />
+    <text x="0" y="5" text-anchor="middle" font-size="16" font-weight="600" fill="#111827" transform="rotate(30)">m</text>
+  </g>
+  <line x1="320" y1="266" x2="420" y2="266" stroke="#2563eb" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.08" />
+<line x1="420" y1="266" x2="420" y2="266" stroke="#2563eb" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.08" />
+  
+  <line x1="320" y1="266" x2="420" y2="266" stroke="#2563eb" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />
+<line x1="320" y1="250" x2="413.8666666666667" y2="250" stroke="#2563eb" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />
+<line x1="320" y1="234" x2="381.6666666666667" y2="234" stroke="#2563eb" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />
+<text x="440" y="252" text-anchor="start" font-size="13" font-weight="600" fill="#2563eb">W</text>
+<text x="433.8666666666667" y="246" text-anchor="start" font-size="13" font-weight="600" fill="#2563eb">N</text>
+<text x="401.6666666666667" y="256" text-anchor="start" font-size="13" font-weight="600" fill="#2563eb">f</text>
+<line x1="320" y1="250" x2="575.5333333333333" y2="250" stroke="#111827" stroke-width="2.3" marker-end="url(#resultantArrow)" stroke-linecap="round" />
+<text x="585.5333333333333" y="240" font-size="14" font-weight="700" fill="#111827">R</text>
+  
+  
+</svg>
