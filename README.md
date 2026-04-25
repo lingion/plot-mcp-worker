@@ -102,7 +102,7 @@ curl http://127.0.0.1:8790/healthz
 npx wrangler deploy
 ```
 
-The Worker is routed through `plot-mcp.qdp.qzz.io/*`. All rendering happens in-worker — no upstream dependencies.
+All rendering happens in-worker — no upstream dependencies.
 
 ## Project Structure
 
