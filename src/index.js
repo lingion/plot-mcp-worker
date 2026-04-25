@@ -3401,13 +3401,7 @@ function renderCircuitDiagramSvg(payload) {
   const components = Array.isArray(payload.components) ? payload.components : [];
   const wires = Array.isArray(payload.wires) ? payload.wires : [];
   const notes = Array.isArray(payload.notes) ? payload.notes : [];
-  // Scale grid coordinates to pixel positions
-  const GRID_STEP = 80;
-  const OFFSET_X = 80;
-  const OFFSET_Y = 100;
-  const scaledComponents = components.map(c => ({...c, x: (Number(c.x||0)) * GRID_STEP + OFFSET_X, y: (Number(c.y||0)) * GRID_STEP + OFFSET_Y}));
-  const scaledWires = wires.map(w => ({...w, x1: (Number(w.x1||0)) * GRID_STEP + OFFSET_X, y1: (Number(w.y1||0)) * GRID_STEP + OFFSET_Y, x2: (Number(w.x2||0)) * GRID_STEP + OFFSET_X, y2: (Number(w.y2||0)) * GRID_STEP + OFFSET_Y}));
-  const contentBounds = [...scaledComponents.map((component) => circuitComponentBounds(component)), ...scaledWires.map((wire) => circuitWireBounds(wire))].reduce((acc, bounds) => acc ? mergeBounds(acc, bounds) : bounds, null) ?? makeBounds(80, 120, 620, 360);
+  const contentBounds = [...components.map((component) => circuitComponentBounds(component)), ...wires.map((wire) => circuitWireBounds(wire))].reduce((acc, bounds) => acc ? mergeBounds(acc, bounds) : bounds, null) ?? makeBounds(80, 120, 620, 360);
   const padX = 36;
   const padY = 26;
   const frameX = Math.max(20, Math.floor(contentBounds.minX - padX));
@@ -3422,7 +3416,7 @@ function renderCircuitDiagramSvg(payload) {
   const noteLineHeight = 16;
   const notesHeight = noteLines.length > 0 ? Math.max(76, 28 + noteLines.length * noteLineHeight + 10) : 0;
   const notesX = frameX + frameWidth + 18;
-  const wireParts = scaledWires.map((wire) => {
+  const wireParts = wires.map((wire) => {
     const x1 = Number(wire.x1 || 0);
     const y1 = Number(wire.y1 || 0);
     const x2 = Number(wire.x2 || 0);
@@ -3434,7 +3428,7 @@ function renderCircuitDiagramSvg(payload) {
     const text = label ? `<text x="${labelPos.x}" y="${labelPos.y}" text-anchor="middle" font-size="${DIAGRAM_TYPE.small}" font-weight="600" fill="${DIAGRAM_COLORS.secondary}">${label}</text>` : "";
     return `${path}${text}`;
   });
-  const componentParts = scaledComponents.map((component) => renderCircuitComponent(component));
+  const componentParts = components.map((component) => renderCircuitComponent(component));
   const noteParts = noteLines.map((note, index) => `<text x="${notesX + 14}" y="${frameY + 33 + index * noteLineHeight}" font-size="${DIAGRAM_TYPE.small}" fill="${DIAGRAM_COLORS.secondary}">${escapeXml(note)}</text>`);
   return makeSvgShell(Math.max(756, notesX + notesWidth + 18), Math.max(468, Math.max(frameY + frameHeight + 32, frameY + notesHeight + 24)), title, `
   <rect x="${frameX}" y="${frameY}" width="${frameWidth}" height="${frameHeight}" fill="#ffffff" stroke="${DIAGRAM_COLORS.ultraFaint}" stroke-width="${DIAGRAM_STROKES.faint}" rx="4" opacity="${DIAGRAM_OPACITY.frame}" />
