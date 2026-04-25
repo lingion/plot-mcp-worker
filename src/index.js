@@ -1722,6 +1722,15 @@ Parser.prototype.isOperatorEnabled = function(op) {
 };
 
 // src/utils.ts
+function toBase64(bytes) {
+  let binary = "";
+  const chunkSize = 32768;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+__name(toBase64, "toBase64");
 function fromBase64(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -1731,12 +1740,24 @@ function fromBase64(base64) {
   return bytes;
 }
 __name(fromBase64, "fromBase64");
+function toBase64Url(bytes) {
+  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+__name(toBase64Url, "toBase64Url");
 function fromBase64Url(packed) {
   const normalized = packed.replace(/-/g, "+").replace(/_/g, "/");
   const pad = normalized.length % 4 === 0 ? "" : "=".repeat(4 - normalized.length % 4);
   return fromBase64(normalized + pad);
 }
 __name(fromBase64Url, "fromBase64Url");
+async function toCompressedBase64UrlFromJson(value) {
+  const json = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json);
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+  return toBase64Url(compressed);
+}
+__name(toCompressedBase64UrlFromJson, "toCompressedBase64UrlFromJson");
 async function parseCompressedBase64UrlJson(packed) {
   const bytes = fromBase64Url(packed);
   const buffer = new ArrayBuffer(bytes.byteLength);
@@ -1830,10 +1851,45 @@ function safeTitle(value, fallback) {
   return limitText(value, fallback, MAX_TITLE_LENGTH);
 }
 __name(safeTitle, "safeTitle");
-function calculateBounds(series) {
+function normalizeAnnotations(rawAnnotations) {
+  return ensureArray(rawAnnotations).slice(0, 24).map((item) => {
+    const record = item && typeof item === "object" ? item : {};
+    const kind = String(record.kind || record.type || "label");
+    const color = safeLabel(record.color, "#7c3aed", 32);
+    if (kind === "vertical_line") {
+      return { kind, x: parseNumber(record.x, 0), label: safeLabel(record.label, ""), color };
+    }
+    if (kind === "point") {
+      return { kind, x: parseNumber(record.x, 0), y: parseNumber(record.y, 0), label: safeLabel(record.label, ""), color };
+    }
+    if (kind === "area") {
+      const xA = parseNumber(record.x_min, 0);
+      const xB = parseNumber(record.x_max, 1);
+      return {
+        kind,
+        x_min: Math.min(xA, xB),
+        x_max: Math.max(xA, xB),
+        label: safeLabel(record.label, ""),
+        color,
+        opacity: clamp(parseNumber(record.opacity, 0.18), 0.05, 0.5)
+      };
+    }
+    return { kind: "label", x: parseNumber(record.x, 0), y: parseNumber(record.y, 0), text: safeLabel(record.text ?? record.label, ""), color };
+  });
+}
+__name(normalizeAnnotations, "normalizeAnnotations");
+function calculateBounds(series, annotations = []) {
   const all = series.flatMap((item) => item.points);
-  const xs = all.map((item) => item.x);
-  const ys = all.map((item) => item.y);
+  const pointAnnotations = annotations.filter((item) => item.kind === "point" || item.kind === "label");
+  const verticalAnnotations = annotations.filter((item) => item.kind === "vertical_line");
+  const areaAnnotations = annotations.filter((item) => item.kind === "area");
+  const xs = [
+    ...all.map((item) => item.x),
+    ...pointAnnotations.map((item) => item.x),
+    ...verticalAnnotations.map((item) => item.x),
+    ...areaAnnotations.flatMap((item) => [item.x_min, item.x_max])
+  ];
+  const ys = [...all.map((item) => item.y), ...pointAnnotations.map((item) => item.y)];
   let xMin = Math.min(...xs);
   let xMax = Math.max(...xs);
   let yMin = Math.min(...ys);
@@ -1856,20 +1912,40 @@ function calculateBounds(series) {
   };
 }
 __name(calculateBounds, "calculateBounds");
-function makeFunctionSeries(expr, points, xMin, xMax, color, name) {
+function parseExpression(expr) {
   const normalizedExpr = String(expr).trim();
   if (!normalizedExpr) throw new Error("expr is required");
   if (normalizedExpr.length > MAX_EXPR_LENGTH) throw new Error(`expr is too long (max ${MAX_EXPR_LENGTH})`);
+  try {
+    return { normalizedExpr, parsed: parser.parse(normalizedExpr) };
+  } catch (error) {
+    const message = String(error?.message || error);
+    throw new Error(`invalid expression syntax: ${message}`);
+  }
+}
+__name(parseExpression, "parseExpression");
+function buildFunctionPoints(parsed, normalizedExpr, points, xMin, xMax) {
   const safePoints = clamp(parseInteger(points, 1e3), MIN_POINTS, MAX_POINTS);
-  const parsed = parser.parse(normalizedExpr);
-  const step = (xMax - xMin) / (safePoints - 1);
+  const step = safePoints <= 1 ? 0 : (xMax - xMin) / (safePoints - 1);
   const result = [];
   for (let i = 0; i < safePoints; i += 1) {
-    const x = xMin + step * i;
-    const y = Number(parsed.evaluate({ x }));
+    const x = safePoints <= 1 ? xMin : xMin + step * i;
+    let y;
+    try {
+      y = Number(parsed.evaluate({ x }));
+    } catch (error) {
+      const message = String(error?.message || error);
+      throw new Error(`failed to evaluate expression ${normalizedExpr} at x=${x}: ${message}`);
+    }
     if (!Number.isFinite(y)) continue;
     result.push({ x, y });
   }
+  return result;
+}
+__name(buildFunctionPoints, "buildFunctionPoints");
+function makeFunctionSeries(expr, points, xMin, xMax, color, name) {
+  const { normalizedExpr, parsed } = parseExpression(expr);
+  const result = buildFunctionPoints(parsed, normalizedExpr, points, xMin, xMax);
   if (result.length === 0) {
     throw new Error(`expression ${normalizedExpr} produced no plottable points`);
   }
@@ -1881,20 +1957,64 @@ function makeFunctionSeries(expr, points, xMin, xMax, color, name) {
   };
 }
 __name(makeFunctionSeries, "makeFunctionSeries");
+function normalizePiecewiseSegments(rawPieces, globalXMin, globalXMax) {
+  const pieces = ensureArray(rawPieces).map((item, index) => {
+    const record = item && typeof item === "object" ? item : {};
+    const expr = String(record.expr || "").trim();
+    const xA = parseNumber(record.x_min, globalXMin);
+    const xB = parseNumber(record.x_max, globalXMax);
+    return {
+      expr,
+      xMin: Math.min(xA, xB),
+      xMax: Math.max(xA, xB),
+      name: record.label === void 0 ? record.name === void 0 ? `Piece ${index + 1}` : String(record.name) : String(record.label),
+      color: typeof record.color === "string" ? record.color : void 0
+    };
+  }).filter((piece) => piece.expr);
+  if (pieces.length === 0) return [];
+  if (pieces.length > MAX_SERIES) throw new Error(`too many piecewise segments (max ${MAX_SERIES})`);
+  pieces.forEach((piece, index) => {
+    if (!(piece.xMax > piece.xMin)) {
+      throw new Error(`piece ${index + 1} must satisfy x_max > x_min`);
+    }
+  });
+  return pieces;
+}
+__name(normalizePiecewiseSegments, "normalizePiecewiseSegments");
+function buildPiecewiseSeries(rawPieces, points, globalXMin, globalXMax) {
+  const pieces = normalizePiecewiseSegments(rawPieces, globalXMin, globalXMax);
+  if (pieces.length === 0) {
+    throw new Error("pieces is required when expr is empty");
+  }
+  const totalSpan = pieces.reduce((sum, piece) => sum + (piece.xMax - piece.xMin), 0);
+  const safePoints = clamp(parseInteger(points, 1e3), MIN_POINTS, MAX_POINTS);
+  const series = pieces.map((piece, index) => {
+    const span = piece.xMax - piece.xMin;
+    const share = totalSpan <= 0 ? 1 / pieces.length : span / totalSpan;
+    const piecePoints = Math.max(2, Math.round(safePoints * share));
+    return makeFunctionSeries(piece.expr, piecePoints, piece.xMin, piece.xMax, piece.color || DEFAULT_PALETTE[index % DEFAULT_PALETTE.length], piece.name || piece.expr);
+  });
+  if (series.every((item) => item.points.length === 0)) {
+    throw new Error("piecewise function produced no plottable points");
+  }
+  return series;
+}
+__name(buildPiecewiseSeries, "buildPiecewiseSeries");
 function buildSinglePlot(args) {
   const expr = String(args.expr || "").trim();
-  if (!expr) throw new Error("expr is required");
   const xMin = parseNumber(args.x_min, -10);
   const xMax = parseNumber(args.x_max, 10);
   if (!(xMax > xMin)) throw new Error("x_max must be greater than x_min");
-  const series = [makeFunctionSeries(expr, parseInteger(args.points, 1e3), xMin, xMax, DEFAULT_PALETTE[0], expr)];
+  const annotations = normalizeAnnotations(args.annotations);
+  const series = expr ? [makeFunctionSeries(expr, parseInteger(args.points, 1e3), xMin, xMax, DEFAULT_PALETTE[0], expr)] : buildPiecewiseSeries(args.pieces, parseInteger(args.points, 1e3), xMin, xMax);
   return {
-    title: safeTitle(args.title, "Function Plot"),
+    title: safeTitle(args.title, expr ? "Function Plot" : "Piecewise Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
     ylabel: safeLabel(args.ylabel, "y"),
     grid: args.grid === void 0 ? true : Boolean(args.grid),
     series,
-    ...calculateBounds(series)
+    annotations,
+    ...calculateBounds(series, annotations)
   };
 }
 __name(buildSinglePlot, "buildSinglePlot");
@@ -1907,6 +2027,7 @@ function buildMultiPlot(args) {
   const xMax = parseNumber(args.x_max, 10);
   if (!(xMax > xMin)) throw new Error("x_max must be greater than x_min");
   const points = parseInteger(args.points, 1e3);
+  const annotations = normalizeAnnotations(args.annotations);
   const series = exprs.map((expr, index) => makeFunctionSeries(expr, points, xMin, xMax, DEFAULT_PALETTE[index % DEFAULT_PALETTE.length], labels[index] || expr));
   return {
     title: safeTitle(args.title, "Multi Function Plot"),
@@ -1914,7 +2035,8 @@ function buildMultiPlot(args) {
     ylabel: safeLabel(args.ylabel, "y"),
     grid: args.grid === void 0 ? true : Boolean(args.grid),
     series,
-    ...calculateBounds(series)
+    annotations,
+    ...calculateBounds(series, annotations)
   };
 }
 __name(buildMultiPlot, "buildMultiPlot");
@@ -1922,6 +2044,7 @@ function buildSeriesPlot(args) {
   const input = ensureArray(args.series);
   if (input.length === 0) throw new Error("series is required");
   if (input.length > MAX_SERIES) throw new Error(`too many series (max ${MAX_SERIES})`);
+  const annotations = normalizeAnnotations(args.annotations);
   const series = input.map((item, index) => {
     const record = item && typeof item === "object" ? item : {};
     const type = record.type === "scatter" || record.type === "line+scatter" ? record.type : "line";
@@ -1938,7 +2061,8 @@ function buildSeriesPlot(args) {
     ylabel: safeLabel(args.ylabel, "y"),
     grid: args.grid === void 0 ? true : Boolean(args.grid),
     series,
-    ...calculateBounds(series)
+    annotations,
+    ...calculateBounds(series, annotations)
   };
 }
 __name(buildSeriesPlot, "buildSeriesPlot");
@@ -2029,6 +2153,16 @@ var DIAGRAM_OPACITY = {
   helper: 0.22,
   frame: 0.95
 };
+var FORCE_LABEL_CHIP = {
+  fill: "rgba(251,253,255,0.9)",
+  stroke: "rgba(226,232,240,0.95)",
+  shadow: "rgba(148,163,184,0.16)",
+  sheen: "rgba(255,255,255,0.72)",
+  paddingX: 7,
+  paddingY: 4,
+  radius: 8,
+  leaderInset: 3
+};
 function makeSvgShell(width, height, title, body) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -2058,14 +2192,15 @@ function polarPoint(cx, cy, radius, angleDeg) {
   };
 }
 __name(polarPoint, "polarPoint");
-function vectorLabelPosition(x, y, dx, dy, index, groupIndex = 0, groupSize = 1, radialPadding = 0) {
+function vectorLabelPosition(x, y, dx, dy, index, groupIndex = 0, groupSize = 1, radialPadding = 0, ringIndex = 0, ringCount = 1) {
   const length = Math.hypot(dx, dy) || 1;
   const nx = dx / length;
   const ny = dy / length;
   const spread = groupSize > 1 ? 18 : 12;
   const normalDirection = groupIndex - (groupSize - 1) / 2;
-  const lateralOffset = spread * normalDirection + (index % 2 === 0 ? 4 : -4);
-  const alongOffset = radialPadding + (groupSize > 1 ? 20 : 14);
+  const ringOffset = ringCount > 1 ? (ringIndex - (ringCount - 1) / 2) * 16 : 0;
+  const lateralOffset = spread * normalDirection + ringOffset + (index % 2 === 0 ? 4 : -4);
+  const alongOffset = radialPadding + (groupSize > 1 ? 20 : 14) + ringIndex * 10;
   return {
     x: x + dx + nx * alongOffset + -ny * lateralOffset,
     y: y - dy - ny * alongOffset + nx * lateralOffset
@@ -2128,6 +2263,65 @@ function mergeBounds(base, next) {
   );
 }
 __name(mergeBounds, "mergeBounds");
+function normalizeVector(dx, dy) {
+  const length = Math.hypot(dx, dy) || 1;
+  return { x: dx / length, y: dy / length };
+}
+__name(normalizeVector, "normalizeVector");
+function rotateIntoBodyLocal(dx, dy, angleDeg) {
+  const angle = angleDeg * Math.PI / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: dx * cos + dy * sin,
+    y: -dx * sin + dy * cos
+  };
+}
+__name(rotateIntoBodyLocal, "rotateIntoBodyLocal");
+function bodyContactDistance(body, direction) {
+  const kind = String(body.kind || "block");
+  const unit = normalizeVector(direction.x, direction.y);
+  if (kind === "particle" || kind === "pulley") {
+    return Number(body.radius || 22);
+  }
+  const width = Number(body.width || (kind === "support" ? 140 : kind === "hanging_mass" ? 62 : 72));
+  const height = Number(body.height || (kind === "support" ? 10 : kind === "hanging_mass" ? 78 : 48));
+  const angleDeg = kind === "block" ? Number(body.angle_deg || 0) : 0;
+  const local = rotateIntoBodyLocal(unit.x, -unit.y, angleDeg);
+  return Math.abs(local.x) * width / 2 + Math.abs(local.y) * height / 2;
+}
+__name(bodyContactDistance, "bodyContactDistance");
+function surfaceFrame(surface, side = -1) {
+  const x1 = Number(surface.x1 || 0);
+  const y1 = Number(surface.y1 || 0);
+  const x2 = Number(surface.x2 || 0);
+  const y2 = Number(surface.y2 || 0);
+  const tangent = normalizeVector(x2 - x1, y2 - y1);
+  return {
+    tangent,
+    normal: normalizeVector(-tangent.y * side, tangent.x * side)
+  };
+}
+__name(surfaceFrame, "surfaceFrame");
+function placeBodyOnSurface(body, surface, t, side = -1, gap = 0) {
+  const anchor = linePoint(
+    Number(surface.x1 || 0),
+    Number(surface.y1 || 0),
+    Number(surface.x2 || 0),
+    Number(surface.y2 || 0),
+    Math.max(0, Math.min(1, t))
+  );
+  const frame = surfaceFrame(surface, side);
+  const distance = bodyContactDistance(body, frame.normal) + gap;
+  return {
+    x: anchor.x + frame.normal.x * distance,
+    y: anchor.y + frame.normal.y * distance,
+    tangent: frame.tangent,
+    normal: frame.normal,
+    distance
+  };
+}
+__name(placeBodyOnSurface, "placeBodyOnSurface");
 function renderForceBody(body) {
   const kind = String(body.kind || "block");
   const x = Number(body.x || 320);
@@ -2259,6 +2453,203 @@ function vectorLengthScale(magnitude, maxMagnitude) {
   return 54 + ratio * 46;
 }
 __name(vectorLengthScale, "vectorLengthScale");
+function compactForceLabelText(text, maxWidth) {
+  const plain = String(text || "").trim();
+  if (!plain) return "";
+  if (estimateTextWidth(plain, DIAGRAM_TYPE.body, 1.1) <= maxWidth) return plain;
+  let compact = plain;
+  while (compact.length > 1 && estimateTextWidth(`${compact}\u2026`, DIAGRAM_TYPE.body, 1.1) > maxWidth) {
+    compact = compact.slice(0, -1).trimEnd();
+  }
+  return `${compact || plain[0]}\u2026`;
+}
+__name(compactForceLabelText, "compactForceLabelText");
+function forceLabelMaxWidth(side) {
+  if (side === "left") return 88;
+  if (side === "right") return 96;
+  return 84;
+}
+__name(forceLabelMaxWidth, "forceLabelMaxWidth");
+function forceLabelChipPadding(item) {
+  if (item.side === "left") return { left: 6, right: 9, top: 4, bottom: 4 };
+  if (item.side === "right") return { left: 9, right: 6, top: 4, bottom: 4 };
+  return { left: 7, right: 7, top: 4, bottom: 4 };
+}
+__name(forceLabelChipPadding, "forceLabelChipPadding");
+function forceLabelChipRect(item) {
+  const padding = forceLabelChipPadding(item);
+  const textWidth = estimateTextWidth(item.labelText, DIAGRAM_TYPE.body, 1.1);
+  const width = textWidth + padding.left + padding.right;
+  const height = DIAGRAM_TYPE.body + padding.top + padding.bottom;
+  const anchorX = item.labelAnchor === "start" ? item.labelX - padding.left : item.labelAnchor === "end" ? item.labelX - textWidth - padding.right : item.labelX - width / 2;
+  const x = anchorX;
+  const y = item.labelY - DIAGRAM_TYPE.body + 1 - padding.top;
+  return { x, y, width, height };
+}
+__name(forceLabelChipRect, "forceLabelChipRect");
+function forceLabelLeaderAnchor(item) {
+  const rect = forceLabelChipRect(item);
+  const centerY = rect.y + rect.height / 2;
+  if (item.labelAnchor === "start") {
+    return { x: rect.x - FORCE_LABEL_CHIP.leaderInset, y: centerY };
+  }
+  if (item.labelAnchor === "end") {
+    return { x: rect.x + rect.width + FORCE_LABEL_CHIP.leaderInset, y: centerY };
+  }
+  const dx = item.endX - item.labelX;
+  const dy = item.endY - item.labelY;
+  if (item.side === "center") {
+    const prefersTopExit = dy < 0;
+    return {
+      x: rect.x + rect.width / 2,
+      y: prefersTopExit ? rect.y - FORCE_LABEL_CHIP.leaderInset : rect.y + rect.height + FORCE_LABEL_CHIP.leaderInset
+    };
+  }
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return {
+      x: dx >= 0 ? rect.x + rect.width + FORCE_LABEL_CHIP.leaderInset : rect.x - FORCE_LABEL_CHIP.leaderInset,
+      y: centerY
+    };
+  }
+  return {
+    x: rect.x + rect.width / 2,
+    y: dy >= 0 ? rect.y + rect.height + FORCE_LABEL_CHIP.leaderInset : rect.y - FORCE_LABEL_CHIP.leaderInset
+  };
+}
+__name(forceLabelLeaderAnchor, "forceLabelLeaderAnchor");
+function renderForceLabelChip(item) {
+  const rect = forceLabelChipRect(item);
+  const innerWidth = Math.max(10, rect.width - 4);
+  const innerHeight = Math.max(8, Math.min(rect.height - 7, rect.height * 0.42));
+  const widthTightness = Math.max(0, Math.min(1, (rect.width - 54) / 46));
+  const shadowOffsetX = (item.side === "left" ? -1.2 : item.side === "right" ? 1.8 : 0.8) + widthTightness * 0.5;
+  const shadowOffsetY = (item.side === "center" ? 2.4 : 1.8) + widthTightness * 0.35;
+  const sheenOffsetX = (item.side === "left" ? 1.2 : item.side === "right" ? 2.8 : 1.8) + widthTightness * 0.3;
+  const sheenOffsetY = (item.side === "center" ? 1.1 : 1.5) + widthTightness * 0.15;
+  const sheenInset = 2 + widthTightness * 1.4;
+  const sheenWidth = Math.max(9, innerWidth - (item.side === "center" ? 6 : item.side === "left" ? 8 : 2) - widthTightness * 4);
+  const sheenHeight = Math.max(7, innerHeight - (item.side === "center" ? 1 : 0) - widthTightness * 0.8);
+  const sheenRadius = Math.max(4, FORCE_LABEL_CHIP.radius - 3 - widthTightness * 0.6);
+  return [
+    `<rect x="${rect.x + shadowOffsetX}" y="${rect.y + shadowOffsetY}" width="${rect.width}" height="${rect.height}" rx="${FORCE_LABEL_CHIP.radius}" fill="${FORCE_LABEL_CHIP.shadow}" opacity="0.9" />`,
+    `<rect x="${rect.x}" y="${rect.y}" width="${rect.width}" height="${rect.height}" rx="${FORCE_LABEL_CHIP.radius}" fill="${FORCE_LABEL_CHIP.fill}" stroke="${FORCE_LABEL_CHIP.stroke}" stroke-width="0.9" />`,
+    `<rect x="${rect.x + sheenOffsetX + sheenInset * 0.15}" y="${rect.y + sheenOffsetY}" width="${sheenWidth}" height="${sheenHeight}" rx="${sheenRadius}" fill="${FORCE_LABEL_CHIP.sheen}" opacity="0.85" />`
+  ].join("");
+}
+__name(renderForceLabelChip, "renderForceLabelChip");
+function renderForceLabelConnector(item, anchorX, anchorY) {
+  const rect = forceLabelChipRect(item);
+  const dx = anchorX - item.endX;
+  const dy = anchorY - item.endY;
+  const distance = Math.hypot(dx, dy);
+  if (distance <= 10) return "";
+  const widthTightness = Math.max(0, Math.min(1, (rect.width - 54) / 46));
+  const boundCompression = Math.max(0, Math.min(1, Math.abs(item.columnBoundShift) / 24));
+  const centerRhythm = item.side === "center" ? Math.min(1, item.connectorLane / 3) : 0;
+  const step = Math.min(16 + widthTightness * 4 - boundCompression * 2.2 + centerRhythm * 1.6, Math.max(8, distance * (0.18 + widthTightness * 0.04 - boundCompression * 0.03 + centerRhythm * 0.02)));
+  const laneOffset = item.side === "center" ? item.connectorLane * (4.5 + widthTightness * 1.2) : item.connectorLane * (7 + widthTightness * 2.5 - boundCompression * 1.8);
+  const exitX = item.endX + (Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx || 1) * step : 0);
+  const exitY = item.endY + (Math.abs(dy) > Math.abs(dx) ? Math.sign(dy || 1) * step : 0);
+  const midX = item.side === "center" ? anchorX + (item.connectorLane % 2 === 0 ? -1 : 1) * laneOffset : exitX + (item.side === "right" ? laneOffset : -laneOffset);
+  const midY = item.side === "center" ? exitY + laneOffset * (0.55 + centerRhythm * 0.18) : anchorY - laneOffset * (0.35 - widthTightness * 0.08 + boundCompression * 0.05);
+  const tailDx = anchorX - midX;
+  const tailDy = anchorY - midY;
+  const tailLength = Math.hypot(tailDx, tailDy) || 1;
+  const connectorGap = Math.min(7 + widthTightness - boundCompression * 0.6, Math.max(3.5, tailLength * (0.18 - widthTightness * 0.04 + boundCompression * 0.02)));
+  const endX = anchorX - tailDx / tailLength * connectorGap;
+  const endY = anchorY - tailDy / tailLength * connectorGap;
+  return `<polyline points="${item.endX},${item.endY} ${midX},${midY} ${endX},${endY}" fill="none" stroke="${item.color}" stroke-width="1" stroke-dasharray="3 3" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />`;
+}
+__name(renderForceLabelConnector, "renderForceLabelConnector");
+function assignForceConnectorLanes(items) {
+  const laneCountBySide = /* @__PURE__ */ new Map();
+  return items.map((item) => {
+    const lane = laneCountBySide.get(item.side) || 0;
+    laneCountBySide.set(item.side, lane + 1);
+    return { ...item, connectorLane: lane };
+  });
+}
+__name(assignForceConnectorLanes, "assignForceConnectorLanes");
+function coordinateForceLabelColumns(items) {
+  const widthTargetBySide = /* @__PURE__ */ new Map();
+  ["left", "right"].forEach((side) => {
+    const sideItems = items.filter((item) => item.side === side);
+    if (sideItems.length < 2) return;
+    const widths = sideItems.map((item) => estimateTextWidth(item.labelText, DIAGRAM_TYPE.body, 1.1));
+    const target = Math.min(Math.max(...widths), Math.max(...widths.slice().sort((a, b) => a - b).slice(0, Math.max(1, widths.length - 1))) + 10);
+    widthTargetBySide.set(side, target);
+  });
+  return items.map((item) => {
+    const target = widthTargetBySide.get(item.side);
+    if (!target) return item;
+    const compactLabel = compactForceLabelText(item.rawLabel, target);
+    return { ...item, labelText: escapeXml(compactLabel) };
+  });
+}
+__name(coordinateForceLabelColumns, "coordinateForceLabelColumns");
+function adjustForceLabelPositions(items) {
+  const minGap = 8;
+  const adjustedBySide = /* @__PURE__ */ new Map();
+  ["left", "center", "right"].forEach((side) => {
+    const sorted = items.filter((item) => item.side === side).sort((a, b) => a.labelY - b.labelY);
+    const adjusted = [];
+    const columnLimit = side === "left" ? 214 : side === "right" ? 426 : null;
+    sorted.forEach((item) => {
+      const previous = adjusted[adjusted.length - 1];
+      let nextY = item.labelY;
+      let nextX = item.labelX;
+      if (previous) {
+        const previousRect = forceLabelChipRect(previous);
+        let nextRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+        const horizontalOverlap = Math.min(previousRect.x + previousRect.width, nextRect.x + nextRect.width) - Math.max(previousRect.x, nextRect.x);
+        const verticalOverlap = Math.min(previousRect.y + previousRect.height, nextRect.y + nextRect.height) - Math.max(previousRect.y, nextRect.y);
+        const sideMinGap = side === "center" ? 12 : minGap;
+        if (verticalOverlap > -sideMinGap && horizontalOverlap > 0) {
+          nextY += verticalOverlap + sideMinGap;
+          if (side === "center") {
+            nextY += Math.min(8, 2 + adjusted.length * 0.8);
+          } else {
+            const horizontalBump = 12 + Math.min(22, nextRect.width * 0.12);
+            nextX += side === "right" ? horizontalBump : -horizontalBump;
+          }
+          nextRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+          const secondHorizontalOverlap = Math.min(previousRect.x + previousRect.width, nextRect.x + nextRect.width) - Math.max(previousRect.x, nextRect.x);
+          const secondVerticalOverlap = Math.min(previousRect.y + previousRect.height, nextRect.y + nextRect.height) - Math.max(previousRect.y, nextRect.y);
+          if (secondHorizontalOverlap > 0 && secondVerticalOverlap > -sideMinGap) {
+            nextY += secondVerticalOverlap + sideMinGap;
+          }
+        }
+      }
+      let boundShift = 0;
+      if (columnLimit !== null) {
+        const boundedRect = forceLabelChipRect({ ...item, labelX: nextX, labelY: nextY });
+        if (side === "left") {
+          const overflow = boundedRect.x - columnLimit;
+          if (overflow > 0) {
+            nextX -= overflow;
+            boundShift = overflow;
+          }
+        } else {
+          const overflow = columnLimit - (boundedRect.x + boundedRect.width);
+          if (overflow > 0) {
+            nextX += overflow;
+            boundShift = overflow;
+          }
+        }
+      }
+      adjusted.push({ ...item, labelX: nextX, labelY: nextY, columnBoundShift: boundShift });
+    });
+    adjustedBySide.set(side, adjusted);
+  });
+  const indexBySignature = /* @__PURE__ */ new Map();
+  adjustedBySide.forEach((group) => {
+    group.forEach((item) => {
+      indexBySignature.set(`${item.endX}:${item.endY}:${item.labelText}`, item);
+    });
+  });
+  return items.map((item) => indexBySignature.get(`${item.endX}:${item.endY}:${item.labelText}`) || item);
+}
+__name(adjustForceLabelPositions, "adjustForceLabelPositions");
 function forceReferenceAngle(angleDeg, inclineDeg) {
   const tangent = 180 - inclineDeg;
   const normal = 90 - inclineDeg;
@@ -2308,37 +2699,77 @@ function renderBodyForces(body, showComponents, showAngleLabels, context = {}) {
   const angleGroups = buildAngleGroups(forces);
   const groupOrder = /* @__PURE__ */ new Map();
   const metaByIndex = /* @__PURE__ */ new Map();
+  const pendingLabels = [];
+  const compactMode = Boolean(context.compactMode);
+  const bodyCenter = compactMode ? { x, y } : null;
+  const ringCount = compactMode ? Math.max(1, Math.ceil(forces.length / 2)) : 1;
   forces.forEach((force, index) => {
     const angleDeg = Number(force.angle_deg || 0);
     const angle = angleDeg * Math.PI / 180;
     const magnitude = Math.max(0.5, Number(force.magnitude || 1));
     const color = escapeXml(String(force.color || "#1d4ed8"));
-    const label = escapeXml(String(force.label || "F"));
+    const rawLabel = String(force.label || "F");
     const normalized = (angleDeg % 360 + 360) % 360;
     const groupKey = Math.round(normalized / 12);
     const group = angleGroups.get(groupKey) || [index];
     const groupIndex = groupOrder.get(groupKey) || 0;
     groupOrder.set(groupKey, groupIndex + 1);
+    const ringIndex = compactMode ? Math.floor(index / 2) : 0;
     const lateralBase = context.preferLocalAngles ? 16 : 12;
     const lateralShift = group.length > 1 ? (groupIndex - (group.length - 1) / 2) * lateralBase : 0;
-    const startX = x + -Math.sin(angle) * lateralShift;
-    const startY = y + -Math.cos(angle) * lateralShift;
+    const unitX = Math.cos(angle);
+    const unitY = Math.sin(angle);
+    const normalX = -Math.sin(angle);
+    const normalY = -Math.cos(angle);
+    const contactRadius = compactMode ? bodyContactDistance(body, { x: unitX, y: unitY }) + 6 : 0;
+    const startX = x + unitX * contactRadius + normalX * lateralShift;
+    const startY = y - unitY * contactRadius + normalY * lateralShift;
     const length = vectorLengthScale(magnitude, maxMagnitude);
     const dx = Math.cos(angle) * length;
     const dy = Math.sin(angle) * length;
     const x2 = startX + dx;
     const y2 = startY - dy;
-    const labelPos = vectorLabelPosition(startX, startY, dx, dy, index, groupIndex, group.length, context.preferLocalAngles ? 10 : 6);
+    const labelPos = vectorLabelPosition(
+      startX,
+      startY,
+      dx,
+      dy,
+      index,
+      groupIndex,
+      group.length,
+      contactRadius,
+      ringIndex,
+      ringCount
+    );
     const labelAnchor = vectorLabelAnchor(dx, dy);
+    const side = labelAnchor === "start" ? "right" : labelAnchor === "end" ? "left" : "center";
+    const label = escapeXml(compactMode ? compactForceLabelText(rawLabel, forceLabelMaxWidth(side)) : rawLabel);
     sumX += dx;
     sumY += dy;
-    metaByIndex.set(index, { groupIndex, groupSize: group.length, startX, startY, dx, dy });
+    const meta = { groupIndex, groupSize: group.length, startX, startY, dx, dy, rawLabel, labelX: labelPos.x, labelY: labelPos.y, labelText: label, labelAnchor, color, side, endX: x2, endY: y2, connectorLane: 0, columnBoundShift: 0 };
+    metaByIndex.set(index, meta);
+    pendingLabels.push(meta);
+    if (bodyCenter) {
+      vectorLines.push(`<line x1="${bodyCenter.x}" y1="${bodyCenter.y}" x2="${startX}" y2="${startY}" stroke="${color}" stroke-width="1.2" opacity="0.28" />`);
+    }
     vectorLines.push(`<line x1="${startX}" y1="${startY}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2.1" marker-end="url(#forceArrow)" stroke-linecap="round" />`);
-    vectorLines.push(`<text x="${labelPos.x}" y="${labelPos.y}" text-anchor="${labelAnchor}" font-size="${DIAGRAM_TYPE.body}" font-weight="600" fill="${color}">${label}</text>`);
     if (showComponents && (group.length === 1 || groupIndex === 0)) {
       helperLines.push(`<line x1="${startX}" y1="${startY}" x2="${x2}" y2="${startY}" stroke="${color}" stroke-width="${DIAGRAM_STROKES.helper}" stroke-dasharray="4 4" opacity="${componentOpacity}" />`);
       helperLines.push(`<line x1="${x2}" y1="${startY}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${DIAGRAM_STROKES.helper}" stroke-dasharray="4 4" opacity="${componentOpacity}" />`);
     }
+  });
+  const placedLabels = compactMode ? assignForceConnectorLanes(adjustForceLabelPositions(coordinateForceLabelColumns(pendingLabels))) : pendingLabels;
+  placedLabels.forEach((item) => {
+    const chipAnchor = compactMode ? forceLabelLeaderAnchor(item) : null;
+    const anchorX = chipAnchor ? chipAnchor.x : item.labelAnchor === "start" ? item.labelX - 4 : item.labelAnchor === "end" ? item.labelX + 4 : item.labelX;
+    const anchorY = chipAnchor ? chipAnchor.y : item.labelY - 5;
+    if (compactMode && (Math.abs(anchorX - item.endX) > 10 || Math.abs(anchorY - item.endY) > 10)) {
+      vectorLines.push(renderForceLabelConnector(item, anchorX, anchorY));
+    }
+    if (compactMode) {
+      vectorLines.push(renderForceLabelChip(item));
+    }
+    vectorLines.push(`<text x="${item.labelX}" y="${item.labelY}" text-anchor="${item.labelAnchor}" font-size="${DIAGRAM_TYPE.body}" font-weight="600" fill="${item.color}">${item.labelText}</text>`);
   });
   if (showAngleLabels) {
     const inclineDeg = Number(context.inclineDeg || 0);
@@ -2359,11 +2790,13 @@ function renderBodyForces(body, showComponents, showAngleLabels, context = {}) {
       const angleDeg = Number(force.angle_deg || 0);
       const meta = metaByIndex.get(index);
       if (!meta || meta.groupSize > 1 && meta.groupIndex > 0) return;
+      const angleOriginX = compactMode ? meta.startX : x;
+      const angleOriginY = compactMode ? meta.startY : y;
       if (preferLocalAngles) {
         const reference = forceReferenceAngle(angleDeg, inclineDeg);
         annotationLines.push(renderAngleAnnotation(
-          x,
-          y,
+          angleOriginX,
+          angleOriginY,
           reference.startDeg,
           angleDeg,
           30 + annotationIndex * 12,
@@ -2373,8 +2806,8 @@ function renderBodyForces(body, showComponents, showAngleLabels, context = {}) {
         return;
       }
       annotationLines.push(renderAngleAnnotation(
-        x,
-        y,
+        angleOriginX,
+        angleOriginY,
         0,
         angleDeg,
         28 + annotationIndex * 12,
@@ -2389,7 +2822,7 @@ __name(renderBodyForces, "renderBodyForces");
 function renderForceDiagramSvg(payload) {
   const bodyLabel = escapeXml(String(payload.body_label || "m"));
   const forces = Array.isArray(payload.forces) ? payload.forces : [];
-  const showComponents = Boolean(payload.show_components);
+  const showComponents = payload.show_components !== false;
   const cx = 260;
   const cy = 220;
   const scale = 38;
@@ -2432,6 +2865,8 @@ function renderForceAnalysisSvg(payload) {
   const bodies = Array.isArray(payload.bodies) && payload.bodies.length > 0 ? payload.bodies : [{ x: 320, y: 250, label: String(payload.body_label || "m"), kind: "particle", forces: Array.isArray(payload.forces) ? payload.forces : [] }];
   const surfaces = Array.isArray(payload.surfaces) ? payload.surfaces : [];
   const connectors = Array.isArray(payload.connectors) ? payload.connectors : [];
+  const totalForces = bodies.reduce((sum, body) => sum + (Array.isArray(body.forces) ? body.forces.length : 0), 0);
+  const compactMode = totalForces >= 5 || preferLocalAngles && bodies.some((body) => Array.isArray(body.forces) && body.forces.length >= 4);
   const backgroundParts = [];
   const sceneParts = [];
   const helperLines = [];
@@ -2455,7 +2890,7 @@ function renderForceAnalysisSvg(payload) {
     const y2 = 380 - Math.tan(inclineRad) * 300;
     sceneParts.push(renderForceSurface({ kind: "incline", x1, y1, x2, y2, label: "" }));
     if (showAngleLabels) {
-      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, 32, `${Math.round(incline)}\xB0`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary }));
+      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, compactMode ? 26 : 32, `${Math.round(incline)}\xB0`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary }));
     }
   }
   surfaces.forEach((surface) => {
@@ -2463,7 +2898,7 @@ function renderForceAnalysisSvg(payload) {
     if (showAngleLabels && preferLocalAngles && String(surface.kind || "") === "incline") {
       const x1 = Number(surface.x1 || 0);
       const y1 = Number(surface.y1 || 0);
-      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, 30, `${Math.round(incline)}\xB0`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary, textSize: 11.5 }));
+      annotationLines.push(renderAngleAnnotation(x1, y1, 0, incline, compactMode ? 24 : 30, `${Math.round(incline)}\xB0`, { stroke: DIAGRAM_COLORS.secondary, textColor: DIAGRAM_COLORS.secondary, textSize: 11.5 }));
     }
   });
   connectors.forEach((connector) => {
@@ -2476,7 +2911,8 @@ function renderForceAnalysisSvg(payload) {
       inclineDeg: incline,
       preferLocalAngles,
       annotateIncline: preferLocalAngles,
-      suppressGlobalAxes: preferLocalAngles
+      suppressGlobalAxes: preferLocalAngles,
+      compactMode
     });
     helperLines.push(...rendered.helperLines);
     annotationLines.push(...rendered.annotationLines);
@@ -2491,12 +2927,17 @@ function renderForceAnalysisSvg(payload) {
     vectorLines.push(`<line x1="${resultantAnchor.x}" y1="${resultantAnchor.y}" x2="${rx}" y2="${ry}" stroke="${DIAGRAM_COLORS.primary}" stroke-width="2.3" marker-end="url(#resultantArrow)" stroke-linecap="round" />`);
     vectorLines.push(`<text x="${rx + 10}" y="${ry - 10}" font-size="14" font-weight="700" fill="${DIAGRAM_COLORS.primary}">R</text>`);
   }
+  const warning = String(payload.warning || "").trim();
+  const warningLines = compactMode && warning ? wrapDiagramText(`\u5DF2\u81EA\u52A8\u7B80\u5316\uFF1A${warning}`, width - 136, DIAGRAM_TYPE.small) : [];
+  const warningPanel = warningLines.length > 0 ? `<rect x="24" y="452" width="652" height="${28 + warningLines.length * 16}" fill="#fff7ed" stroke="#fdba74" stroke-width="0.9" rx="5" />
+      ${warningLines.map((line, index) => `<text x="38" y="${472 + index * 16}" font-size="${DIAGRAM_TYPE.small}" font-weight="${index === 0 ? 600 : 500}" fill="#9a3412">${escapeXml(line)}</text>`).join("\n")}` : "";
   return makeSvgShell(width, height, title, `
   ${backgroundParts.join("\n")}
   ${sceneParts.join("\n")}
   ${helperLines.join("\n")}
   ${annotationLines.join("\n")}
   ${vectorLines.join("\n")}
+  ${warningPanel}
   `);
 }
 __name(renderForceAnalysisSvg, "renderForceAnalysisSvg");
@@ -2862,12 +3303,111 @@ function renderCircuitComponent(component) {
   return parts.join("\n");
 }
 __name(renderCircuitComponent, "renderCircuitComponent");
+function renderVennDiagramSvg(payload) {
+  const title = String(payload.title || "Venn diagram");
+  const sets = Array.isArray(payload.sets) ? payload.sets : [];
+  const labels = sets.length > 0 ? sets.slice(0, 3).map((set, index) => escapeXml(String(set.label || String.fromCharCode(65 + index)))) : ["A", "B", "C"];
+  const colors = sets.length > 0 ? sets.slice(0, 3).map((set, index) => escapeXml(String(set.color || DEFAULT_PALETTE[index % DEFAULT_PALETTE.length]))) : [DEFAULT_PALETTE[0], DEFAULT_PALETTE[1], DEFAULT_PALETTE[2]];
+  const regions = payload.regions && typeof payload.regions === "object" ? payload.regions : {};
+  const mode = labels.length >= 3 ? 3 : 2;
+  const width = 720;
+  const height = 460;
+  const regionText = /* @__PURE__ */ __name((key, fallback = "") => escapeXml(String(regions[key] ?? fallback)), "regionText");
+  if (mode === 2) {
+    return makeSvgShell(width, height, title, `
+    <g opacity="0.55">
+      <circle cx="300" cy="245" r="118" fill="${colors[0]}" />
+      <circle cx="420" cy="245" r="118" fill="${colors[1]}" />
+    </g>
+    <circle cx="300" cy="245" r="118" fill="none" stroke="${colors[0]}" stroke-width="2" />
+    <circle cx="420" cy="245" r="118" fill="none" stroke="${colors[1]}" stroke-width="2" />
+    <text x="242" y="140" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${labels[0]}</text>
+    <text x="478" y="140" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${labels[1]}</text>
+    <text x="255" y="250" text-anchor="middle" font-size="20" font-weight="600" fill="${DIAGRAM_COLORS.primary}">${regionText("A_only")}</text>
+    <text x="360" y="250" text-anchor="middle" font-size="20" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${regionText("A_B")}</text>
+    <text x="465" y="250" text-anchor="middle" font-size="20" font-weight="600" fill="${DIAGRAM_COLORS.primary}">${regionText("B_only")}</text>
+    <text x="108" y="248" text-anchor="middle" font-size="18" fill="${DIAGRAM_COLORS.secondary}">${regionText("outside")}</text>
+    `);
+  }
+  return makeSvgShell(width, height, title, `
+  <g opacity="0.5">
+    <circle cx="300" cy="228" r="108" fill="${colors[0]}" />
+    <circle cx="420" cy="228" r="108" fill="${colors[1]}" />
+    <circle cx="360" cy="324" r="108" fill="${colors[2]}" />
+  </g>
+  <circle cx="300" cy="228" r="108" fill="none" stroke="${colors[0]}" stroke-width="2" />
+  <circle cx="420" cy="228" r="108" fill="none" stroke="${colors[1]}" stroke-width="2" />
+  <circle cx="360" cy="324" r="108" fill="none" stroke="${colors[2]}" stroke-width="2" />
+  <text x="236" y="118" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${labels[0]}</text>
+  <text x="484" y="118" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${labels[1]}</text>
+  <text x="360" y="452" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${labels[2]}</text>
+  <text x="250" y="225" text-anchor="middle" font-size="18" font-weight="600" fill="${DIAGRAM_COLORS.primary}">${regionText("A_only")}</text>
+  <text x="470" y="225" text-anchor="middle" font-size="18" font-weight="600" fill="${DIAGRAM_COLORS.primary}">${regionText("B_only")}</text>
+  <text x="360" y="378" text-anchor="middle" font-size="18" font-weight="600" fill="${DIAGRAM_COLORS.primary}">${regionText("C_only")}</text>
+  <text x="360" y="212" text-anchor="middle" font-size="18" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${regionText("A_B")}</text>
+  <text x="304" y="294" text-anchor="middle" font-size="17" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${regionText("A_C")}</text>
+  <text x="416" y="294" text-anchor="middle" font-size="17" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${regionText("B_C")}</text>
+  <text x="360" y="268" text-anchor="middle" font-size="18" font-weight="800" fill="${DIAGRAM_COLORS.primary}">${regionText("A_B_C")}</text>
+  <text x="104" y="250" text-anchor="middle" font-size="18" fill="${DIAGRAM_COLORS.secondary}">${regionText("outside")}</text>
+  `);
+}
+__name(renderVennDiagramSvg, "renderVennDiagramSvg");
+function renderCMemoryDiagramSvg(payload) {
+  const title = String(payload.title || "C memory layout");
+  const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+  const width = 860;
+  const rowHeight = 56;
+  const top = 96;
+  const left = 84;
+  const cellWidth = 112;
+  const totalRows = Math.max(1, blocks.length);
+  const height = top + totalRows * rowHeight + 72;
+  const parts = [];
+  blocks.forEach((block, index) => {
+    const y = top + index * rowHeight;
+    const name = escapeXml(String(block.name || `slot_${index}`));
+    const type = escapeXml(String(block.type || ""));
+    const value = escapeXml(String(block.value || ""));
+    const address = escapeXml(String(block.address || `0x${(4096 + index * 4).toString(16)}`));
+    const bytes = Array.isArray(block.bytes) ? block.bytes.slice(0, 8).map((byte) => escapeXml(String(byte))) : [];
+    const note = escapeXml(String(block.note || ""));
+    parts.push(`<text x="${left - 16}" y="${y + 34}" text-anchor="end" font-size="14" font-weight="600" fill="${DIAGRAM_COLORS.secondary}">${address}</text>`);
+    parts.push(`<rect x="${left}" y="${y}" width="120" height="34" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2" />`);
+    parts.push(`<text x="${left + 60}" y="${y + 23}" text-anchor="middle" font-size="15" font-weight="700" fill="${DIAGRAM_COLORS.primary}">${name}</text>`);
+    parts.push(`<rect x="${left + 132}" y="${y}" width="110" height="34" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2" />`);
+    parts.push(`<text x="${left + 187}" y="${y + 23}" text-anchor="middle" font-size="14" fill="${DIAGRAM_COLORS.secondary}">${type}</text>`);
+    parts.push(`<rect x="${left + 254}" y="${y}" width="146" height="34" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2" />`);
+    parts.push(`<text x="${left + 327}" y="${y + 23}" text-anchor="middle" font-size="15" font-weight="600" fill="#1d4ed8">${value}</text>`);
+    bytes.forEach((byte, byteIndex) => {
+      const x = left + 420 + byteIndex * cellWidth * 0.58;
+      parts.push(`<rect x="${x}" y="${y}" width="58" height="34" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1" />`);
+      parts.push(`<text x="${x + 29}" y="${y + 23}" text-anchor="middle" font-size="13" fill="${DIAGRAM_COLORS.primary}">${byte}</text>`);
+    });
+    if (note) {
+      parts.push(`<text x="${left + 420}" y="${y + 52}" font-size="12.5" fill="${DIAGRAM_COLORS.secondary}">${note}</text>`);
+    }
+  });
+  return makeSvgShell(width, height, title, `
+  <text x="${left + 60}" y="78" text-anchor="middle" font-size="12" font-weight="600" fill="${DIAGRAM_COLORS.tertiary}">\u53D8\u91CF</text>
+  <text x="${left + 187}" y="78" text-anchor="middle" font-size="12" font-weight="600" fill="${DIAGRAM_COLORS.tertiary}">\u7C7B\u578B</text>
+  <text x="${left + 327}" y="78" text-anchor="middle" font-size="12" font-weight="600" fill="${DIAGRAM_COLORS.tertiary}">\u503C</text>
+  <text x="${left + 510}" y="78" text-anchor="middle" font-size="12" font-weight="600" fill="${DIAGRAM_COLORS.tertiary}">\u5185\u5B58\u5185\u5BB9</text>
+  ${parts.join("\n")}
+  `);
+}
+__name(renderCMemoryDiagramSvg, "renderCMemoryDiagramSvg");
 function renderCircuitDiagramSvg(payload) {
   const title = String(payload.title || "Circuit diagram");
   const components = Array.isArray(payload.components) ? payload.components : [];
   const wires = Array.isArray(payload.wires) ? payload.wires : [];
   const notes = Array.isArray(payload.notes) ? payload.notes : [];
-  const contentBounds = [...components.map((component) => circuitComponentBounds(component)), ...wires.map((wire) => circuitWireBounds(wire))].reduce((acc, bounds) => acc ? mergeBounds(acc, bounds) : bounds, null) ?? makeBounds(80, 120, 620, 360);
+  // Scale grid coordinates to pixel positions
+  const GRID_STEP = 80;
+  const OFFSET_X = 80;
+  const OFFSET_Y = 100;
+  const scaledComponents = components.map(c => ({...c, x: (Number(c.x||0)) * GRID_STEP + OFFSET_X, y: (Number(c.y||0)) * GRID_STEP + OFFSET_Y}));
+  const scaledWires = wires.map(w => ({...w, x1: (Number(w.x1||0)) * GRID_STEP + OFFSET_X, y1: (Number(w.y1||0)) * GRID_STEP + OFFSET_Y, x2: (Number(w.x2||0)) * GRID_STEP + OFFSET_X, y2: (Number(w.y2||0)) * GRID_STEP + OFFSET_Y}));
+  const contentBounds = [...scaledComponents.map((component) => circuitComponentBounds(component)), ...scaledWires.map((wire) => circuitWireBounds(wire))].reduce((acc, bounds) => acc ? mergeBounds(acc, bounds) : bounds, null) ?? makeBounds(80, 120, 620, 360);
   const padX = 36;
   const padY = 26;
   const frameX = Math.max(20, Math.floor(contentBounds.minX - padX));
@@ -2882,7 +3422,7 @@ function renderCircuitDiagramSvg(payload) {
   const noteLineHeight = 16;
   const notesHeight = noteLines.length > 0 ? Math.max(76, 28 + noteLines.length * noteLineHeight + 10) : 0;
   const notesX = frameX + frameWidth + 18;
-  const wireParts = wires.map((wire) => {
+  const wireParts = scaledWires.map((wire) => {
     const x1 = Number(wire.x1 || 0);
     const y1 = Number(wire.y1 || 0);
     const x2 = Number(wire.x2 || 0);
@@ -2894,7 +3434,7 @@ function renderCircuitDiagramSvg(payload) {
     const text = label ? `<text x="${labelPos.x}" y="${labelPos.y}" text-anchor="middle" font-size="${DIAGRAM_TYPE.small}" font-weight="600" fill="${DIAGRAM_COLORS.secondary}">${label}</text>` : "";
     return `${path}${text}`;
   });
-  const componentParts = components.map((component) => renderCircuitComponent(component));
+  const componentParts = scaledComponents.map((component) => renderCircuitComponent(component));
   const noteParts = noteLines.map((note, index) => `<text x="${notesX + 14}" y="${frameY + 33 + index * noteLineHeight}" font-size="${DIAGRAM_TYPE.small}" fill="${DIAGRAM_COLORS.secondary}">${escapeXml(note)}</text>`);
   return makeSvgShell(Math.max(756, notesX + notesWidth + 18), Math.max(468, Math.max(frameY + frameHeight + 32, frameY + notesHeight + 24)), title, `
   <rect x="${frameX}" y="${frameY}" width="${frameWidth}" height="${frameHeight}" fill="#ffffff" stroke="${DIAGRAM_COLORS.ultraFaint}" stroke-width="${DIAGRAM_STROKES.faint}" rx="4" opacity="${DIAGRAM_OPACITY.frame}" />
@@ -2906,6 +3446,52 @@ function renderCircuitDiagramSvg(payload) {
   `);
 }
 __name(renderCircuitDiagramSvg, "renderCircuitDiagramSvg");
+
+function renderSurfacePreviewSvg(payload) {
+  const title = escapeXml(String(payload.title || "3D Surface"));
+  const color = escapeXml(String(payload.color || "#4f46e5"));
+  const width = 720;
+  const height = 480;
+  const cx = width / 2;
+  const cy = height / 2;
+  // Generate isometric grid lines as visual hint
+  let gridLines = "";
+  for (let i = -5; i <= 5; i++) {
+    const x = cx + i * 30;
+    gridLines += `<line x1="${x}" y1="${cy - 150}" x2="${x}" y2="${cy + 150}" stroke="#e5e7eb" stroke-width="0.5" />`;
+    gridLines += `<line x1="${cx - 250}" y1="${cy + i * 25}" x2="${cx + 250}" y2="${cy + i * 25}" stroke="#e5e7eb" stroke-width="0.5" />`;
+  }
+  // Draw a stylized 3D surface representation
+  let surfacePath = "";
+  for (let row = -4; row <= 4; row++) {
+    let path = "";
+    for (let col = -6; col <= 6; col++) {
+      const px = cx + col * 28;
+      const py = cy + row * 22 - Math.sin(col * 0.5) * Math.cos(row * 0.7) * 40;
+      path += (col === -6 ? "M" : "L") + `${px},${py} `;
+    }
+    surfacePath += `<path d="${path}" fill="none" stroke="${color}" stroke-width="1.2" opacity="${0.3 + Math.abs(row) * 0.08}" />`;
+  }
+  for (let col = -6; col <= 6; col += 2) {
+    let path = "";
+    for (let row = -4; row <= 4; row++) {
+      const px = cx + col * 28;
+      const py = cy + row * 22 - Math.sin(col * 0.5) * Math.cos(row * 0.7) * 40;
+      path += (row === -4 ? "M" : "L") + `${px},${py} `;
+    }
+    surfacePath += `<path d="${path}" fill="none" stroke="${color}" stroke-width="0.8" opacity="0.25" />`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs><style>text{font-family:system-ui,-apple-system,sans-serif}</style></defs>
+  <rect width="${width}" height="${height}" fill="#fafbfc" rx="8"/>
+  <text x="${cx}" y="36" text-anchor="middle" font-size="20" font-weight="600" fill="#111827">${title}</text>
+  <text x="${cx}" y="56" text-anchor="middle" font-size="12" fill="#6b7280">Interactive 3D preview - click html_url for full Plotly rendering</text>
+  ${gridLines}${surfacePath}
+  <text x="${cx}" y="${height - 16}" text-anchor="middle" font-size="11" fill="#9ca3af">Surface preview (static)</text>
+  </svg>`;
+}
+__name(renderSurfacePreviewSvg, "renderSurfacePreviewSvg");
+
 function renderShape3DHtml(payload) {
   const shape = String(payload.shape || "cube");
   const title = escapeXml(String(payload.title || "3D Shape"));
@@ -3700,10 +4286,16 @@ function mapY(y, yMin, yMax, plotY, plotHeight) {
 }
 __name(mapY, "mapY");
 function makePath(points, spec, plotX, plotY, plotWidth, plotHeight) {
+  if (points.length === 0) return "";
+  const xSpan = spec.xMax - spec.xMin;
+  const ySpan = spec.yMax - spec.yMin;
+  const typicalDx = points.length > 1 ? Math.max(1e-9, xSpan / Math.max(1, points.length - 1)) : xSpan;
   return points.map((point, index) => {
+    const previous = index > 0 ? points[index - 1] : null;
+    const jump = previous ? Math.abs(point.y - previous.y) > ySpan * 0.45 || Math.abs(point.x - previous.x) > typicalDx * 2.5 : false;
     const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
     const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
-    return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    return `${index === 0 || jump ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(" ");
 }
 __name(makePath, "makePath");
@@ -3731,6 +4323,48 @@ function renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight) {
   }).join("");
 }
 __name(renderBarLayer, "renderBarLayer");
+function firstSeriesAreaPath(spec, xMin, xMax, plotX, plotY, plotWidth, plotHeight) {
+  const points = spec.series[0]?.points.filter((point) => point.x >= xMin && point.x <= xMax) || [];
+  if (points.length < 2) return "";
+  const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+  const start = points[0];
+  const end = points[points.length - 1];
+  const top = points.map((point, index) => {
+    const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+    const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  const endX = mapX(end.x, spec.xMin, spec.xMax, plotX, plotWidth);
+  const startX = mapX(start.x, spec.xMin, spec.xMax, plotX, plotWidth);
+  return `${top} L${endX.toFixed(2)},${zeroY.toFixed(2)} L${startX.toFixed(2)},${zeroY.toFixed(2)} Z`;
+}
+__name(firstSeriesAreaPath, "firstSeriesAreaPath");
+function renderAnnotations(spec, plotX, plotY, plotWidth, plotHeight) {
+  const annotations = spec.annotations || [];
+  const areaLayer = annotations.filter((item) => item.kind === "area").map((item) => {
+    const path = firstSeriesAreaPath(spec, item.x_min, item.x_max, plotX, plotY, plotWidth, plotHeight);
+    if (!path) return "";
+    const labelX = mapX((item.x_min + item.x_max) / 2, spec.xMin, spec.xMax, plotX, plotWidth);
+    const labelY = plotY + 28;
+    return `<g><path d="${path}" fill="${item.color}" opacity="${item.opacity}"/><text x="${labelX.toFixed(2)}" y="${labelY}" font-size="17" text-anchor="middle" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+  }).join("");
+  const lineLayer = annotations.filter((item) => item.kind === "vertical_line").map((item) => {
+    const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
+    return `<g><line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${item.color}" stroke-width="2.5" stroke-dasharray="8 7"/><text x="${(x + 8).toFixed(2)}" y="${plotY + 24}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+  }).join("");
+  const pointLayer = annotations.filter((item) => item.kind === "point").map((item) => {
+    const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
+    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    return `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="6" fill="${item.color}" stroke="#fff" stroke-width="2"/><text x="${(x + 10).toFixed(2)}" y="${(y - 10).toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.label)}</text></g>`;
+  }).join("");
+  const labelLayer = annotations.filter((item) => item.kind === "label").map((item) => {
+    const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
+    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${escapeXml(item.text)}</text>`;
+  }).join("");
+  return `${areaLayer}${lineLayer}${pointLayer}${labelLayer}`;
+}
+__name(renderAnnotations, "renderAnnotations");
 function renderPlotSvg(spec) {
   const width = DEFAULT_WIDTH;
   const height = DEFAULT_HEIGHT;
@@ -3773,10 +4407,11 @@ function renderPlotSvg(spec) {
       const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
       return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
     }).join("");
-    const line = series.type === "scatter" ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     return `<g>${line}${circles}</g>`;
   }).join("");
   const barLayer = renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight);
+  const annotationLayer = renderAnnotations(spec, plotX, plotY, plotWidth, plotHeight);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <style>
@@ -3790,6 +4425,7 @@ function renderPlotSvg(spec) {
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   ${tickLabels}
   ${barLayer}
+  ${annotationLayer}
   ${seriesSvg}
   ${renderLegend(spec, width)}
   <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${escapeXml(spec.xlabel)}</text>
@@ -3859,6 +4495,47 @@ var plotSeriesItemSchema = {
   required: ["points"],
   additionalProperties: false
 };
+var piecewiseSegmentSchema = {
+  type: "object",
+  properties: {
+    expr: { type: "string" },
+    x_min: { type: "number" },
+    x_max: { type: "number" },
+    label: { type: "string" },
+    name: { type: "string" },
+    color: { type: "string" }
+  },
+  required: ["expr", "x_min", "x_max"],
+  additionalProperties: false
+};
+var plotAnnotationSchema = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["vertical_line", "point", "label", "area"] },
+    type: { type: "string", enum: ["vertical_line", "point", "label", "area"] },
+    x: { type: "number" },
+    y: { type: "number" },
+    x_min: { type: "number" },
+    x_max: { type: "number" },
+    label: { type: "string" },
+    text: { type: "string" },
+    color: { type: "string" },
+    opacity: { type: "number" }
+  },
+  additionalProperties: false
+};
+var teachingParamsSchema = {
+  type: "object",
+  additionalProperties: true
+};
+var teachingToolProperties = {
+  topic: { type: "string", enum: ["parabola", "definite_integral", "tangent_derivative", "fourier_series", "projectile_motion", "simple_harmonic_motion", "energy_conservation", "rc_charging", "rlc_transient", "incline_force", "stress_strain", "band_gap", "venn_probability", "c_pointer_array", "c_struct_layout"] },
+  level: { type: "string", enum: ["intro", "college"], default: "college" },
+  title: { type: "string" },
+  params: teachingParamsSchema,
+  steps: { type: "boolean", default: false },
+  highlight: { type: "boolean", default: true }
+};
 var forceItemSchema = {
   type: "object",
   properties: {
@@ -3920,6 +4597,40 @@ var circuitBranchSchema = {
   required: ["items"],
   additionalProperties: false
 };
+var vennSetSchema = {
+  type: "object",
+  properties: {
+    label: { type: "string" },
+    color: { type: "string" }
+  },
+  additionalProperties: false
+};
+var vennRegionsSchema = {
+  type: "object",
+  properties: {
+    A_only: { type: "string" },
+    B_only: { type: "string" },
+    C_only: { type: "string" },
+    A_B: { type: "string" },
+    A_C: { type: "string" },
+    B_C: { type: "string" },
+    A_B_C: { type: "string" },
+    outside: { type: "string" }
+  },
+  additionalProperties: false
+};
+var cMemoryBlockSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    type: { type: "string" },
+    value: { type: "string" },
+    address: { type: "string" },
+    bytes: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 8 },
+    note: { type: "string" }
+  },
+  additionalProperties: false
+};
 var circuitStageSchema = {
   type: "object",
   properties: {
@@ -3928,27 +4639,6 @@ var circuitStageSchema = {
     branches: { type: "array", items: circuitBranchSchema, minItems: 1 }
   },
   required: ["kind"],
-  additionalProperties: false
-};
-var multiImageJobSchema = {
-  type: "object",
-  properties: {
-    kind: { type: "string", enum: ["plot", "plot_multi", "plot_series", "plot_bar"] },
-    expr: { type: "string" },
-    exprs: { type: "array", items: { type: "string" } },
-    labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
-    series: { type: "array", items: plotSeriesItemSchema },
-    categories: { type: "array", items: { type: "string" } },
-    values: { type: "array", items: { type: "number" } },
-    series_name: { type: "string" },
-    x_min: { type: "number" },
-    x_max: { type: "number" },
-    points: { type: "integer" },
-    title: { type: "string" },
-    xlabel: { type: "string" },
-    ylabel: { type: "string" },
-    grid: { type: "boolean" }
-  },
   additionalProperties: false
 };
 var shape3dPointSchema = {
@@ -4067,8 +4757,7 @@ var TOOLS = [
     description: "Plot a single expression and return PNG data.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 } },
-      required: ["expr"],
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 } },
       additionalProperties: false
     }
   },
@@ -4077,8 +4766,7 @@ var TOOLS = [
     description: "Plot a single expression and return PNG/base64 payload.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" } },
-      required: ["expr"],
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       additionalProperties: false
     }
   },
@@ -4087,8 +4775,7 @@ var TOOLS = [
     description: "Generate a direct PNG URL for a single-expression plot.",
     inputSchema: {
       type: "object",
-      properties: { expr: { type: "string" }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" } },
-      required: ["expr"],
+      properties: { expr: { type: "string" }, pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       additionalProperties: false
     }
   },
@@ -4097,7 +4784,7 @@ var TOOLS = [
     description: "Plot multiple expressions on one chart.",
     inputSchema: {
       type: "object",
-      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" } },
+      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["exprs"],
       additionalProperties: false
     }
@@ -4107,7 +4794,7 @@ var TOOLS = [
     description: "Plot multiple expressions and return PNG/base64 payload.",
     inputSchema: {
       type: "object",
-      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" } },
+      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["exprs"],
       additionalProperties: false
     }
@@ -4117,7 +4804,7 @@ var TOOLS = [
     description: "Generate a direct PNG URL for a multi-expression plot.",
     inputSchema: {
       type: "object",
-      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" } },
+      properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1e3 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["exprs"],
       additionalProperties: false
     }
@@ -4127,7 +4814,7 @@ var TOOLS = [
     description: "Plot custom point series.",
     inputSchema: {
       type: "object",
-      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true } },
+      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["series"],
       additionalProperties: false
     }
@@ -4137,7 +4824,7 @@ var TOOLS = [
     description: "Plot custom point series and return PNG/base64 payload.",
     inputSchema: {
       type: "object",
-      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true } },
+      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["series"],
       additionalProperties: false
     }
@@ -4147,7 +4834,7 @@ var TOOLS = [
     description: "Generate a direct PNG URL for a custom series plot.",
     inputSchema: {
       type: "object",
-      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true } },
+      properties: { series: { type: "array", items: plotSeriesItemSchema, minItems: 1 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, grid: { type: "boolean", default: true }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["series"],
       additionalProperties: false
     }
@@ -4242,6 +4929,32 @@ var TOOLS = [
     }
   },
   {
+    name: "venn_diagram_link",
+    description: "Generate a direct SVG link for a 2-set or 3-set Venn diagram used in probability and set problems.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        sets: { type: "array", items: vennSetSchema, minItems: 2, maxItems: 3 },
+        regions: vennRegionsSchema
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "c_memory_diagram_link",
+    description: "Generate a direct SVG link for a C-language memory layout or pointer teaching diagram.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        blocks: { type: "array", items: cMemoryBlockSchema, minItems: 1 }
+      },
+      required: ["blocks"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "shape3d_link",
     description: "Generate a direct HTML link for an interactive 3D geometric shape viewer.",
     inputSchema: shape3dSchema
@@ -4257,12 +4970,22 @@ var TOOLS = [
     }
   },
   {
-    name: "plot_multi_images",
-    description: "Generate multiple plot images in one call.",
+    name: "teaching_template_link",
+    description: "Generate a teaching-oriented STEM visualization from a high-level template with annotations and highlights.",
     inputSchema: {
       type: "object",
-      properties: { jobs: { type: "array", items: multiImageJobSchema, minItems: 1 } },
-      required: ["jobs"],
+      properties: teachingToolProperties,
+      required: ["topic"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "teaching_sequence_link",
+    description: "Generate a coordinated multi-figure teaching sequence for university STEM explanations.",
+    inputSchema: {
+      type: "object",
+      properties: teachingToolProperties,
+      required: ["topic"],
       additionalProperties: false
     }
   }
@@ -4332,6 +5055,51 @@ function normalizeForceConnector(item, index) {
   };
 }
 __name(normalizeForceConnector, "normalizeForceConnector");
+function sanitizeVennPayload(args) {
+  const sets = ensureArray(args.sets).slice(0, 3).map((item, index) => {
+    const record = item && typeof item === "object" ? item : {};
+    return {
+      label: limitText(record.label, String.fromCharCode(65 + index), MAX_LABEL_LENGTH),
+      color: limitText(record.color, "", 32)
+    };
+  });
+  if (sets.length < 2) throw new Error("sets requires 2 or 3 items");
+  const rawRegions = args.regions && typeof args.regions === "object" ? args.regions : {};
+  return {
+    title: limitText(args.title, "Venn diagram", MAX_TITLE_LENGTH),
+    sets,
+    regions: {
+      A_only: limitText(rawRegions.A_only, "", MAX_LABEL_LENGTH),
+      B_only: limitText(rawRegions.B_only, "", MAX_LABEL_LENGTH),
+      C_only: limitText(rawRegions.C_only, "", MAX_LABEL_LENGTH),
+      A_B: limitText(rawRegions.A_B, "", MAX_LABEL_LENGTH),
+      A_C: limitText(rawRegions.A_C, "", MAX_LABEL_LENGTH),
+      B_C: limitText(rawRegions.B_C, "", MAX_LABEL_LENGTH),
+      A_B_C: limitText(rawRegions.A_B_C, "", MAX_LABEL_LENGTH),
+      outside: limitText(rawRegions.outside, "", MAX_LABEL_LENGTH)
+    }
+  };
+}
+__name(sanitizeVennPayload, "sanitizeVennPayload");
+function sanitizeCMemoryPayload(args) {
+  const blocks = ensureArray(args.blocks).map((item, index) => {
+    const record = item && typeof item === "object" ? item : {};
+    return {
+      name: limitText(record.name, `slot_${index}`, MAX_LABEL_LENGTH),
+      type: limitText(record.type, "", MAX_LABEL_LENGTH),
+      value: limitText(record.value, "", MAX_LABEL_LENGTH),
+      address: limitText(record.address, `0x${(4096 + index * 4).toString(16)}`, MAX_LABEL_LENGTH),
+      bytes: ensureArray(record.bytes).slice(0, 8).map((byte) => limitText(byte, "", 8)),
+      note: limitText(record.note, "", MAX_LABEL_LENGTH * 2)
+    };
+  }).filter((block) => block.name || block.value || block.type || block.bytes.length > 0);
+  if (blocks.length === 0) throw new Error("blocks is required");
+  return {
+    title: limitText(args.title, "C memory layout", MAX_TITLE_LENGTH),
+    blocks
+  };
+}
+__name(sanitizeCMemoryPayload, "sanitizeCMemoryPayload");
 function sanitizeForcePayload(args) {
   const bodiesInput = ensureArray(args.bodies).slice(0, MAX_FORCE_BODIES);
   const bodies = bodiesInput.length > 0 ? bodiesInput.map((item, index) => normalizeForceBody(item, index)) : [{
@@ -4377,15 +5145,34 @@ function sanitizeForceAnalysisPayload(args) {
   }];
   const primaryBody = bodies.find((body) => body.forces.length > 0) || bodies[0];
   if (!primaryBody || primaryBody.forces.length === 0) throw new Error("forces is required");
+  const inclineDeg = parseNumber(args.incline_deg, 0);
+  const totalForces = bodies.reduce((sum, body) => sum + body.forces.length, 0);
+  const preferLocalAngles = Math.abs(inclineDeg) > 0.01;
+  const clusteredAngles = new Set(primaryBody.forces.map((force) => Math.round((force.angle_deg % 360 + 360) % 360 / 12))).size;
+  const denseForceLayout = preferLocalAngles && primaryBody.forces.length >= 4 || totalForces >= 6 || primaryBody.forces.length >= 4 && clusteredAngles <= 3;
+  const autoSimplified = [];
+  const showComponents = args.show_components === void 0 ? !denseForceLayout : args.show_components !== false;
+  if (denseForceLayout && args.show_components === void 0) autoSimplified.push("components");
+  const showAxes = args.show_axes === void 0 ? !(denseForceLayout && preferLocalAngles) : args.show_axes !== false;
+  if (denseForceLayout && preferLocalAngles && args.show_axes === void 0) autoSimplified.push("axes");
+  const showAngleLabels = args.show_angle_labels === void 0 ? false : Boolean(args.show_angle_labels);
+  if (denseForceLayout && args.show_angle_labels === void 0 && preferLocalAngles) autoSimplified.push("angle labels");
+  const showResultant = args.show_resultant === void 0 ? !(denseForceLayout && primaryBody.forces.length >= 5) : args.show_resultant !== false;
+  if (denseForceLayout && primaryBody.forces.length >= 5 && args.show_resultant === void 0) autoSimplified.push("resultant");
+  const warning = [
+    args.warning === void 0 ? "" : limitText(args.warning, "", MAX_TITLE_LENGTH),
+    autoSimplified.length > 0 ? limitText(`auto-simplified ${autoSimplified.join(", ")} to keep dense force layouts readable`, "", MAX_TITLE_LENGTH) : ""
+  ].filter(Boolean).join("; ");
   return {
     title: limitText(args.title, "Force analysis", MAX_TITLE_LENGTH),
     body_label: primaryBody.label,
     forces: primaryBody.forces,
-    show_components: args.show_components !== false,
-    show_axes: args.show_axes !== false,
-    show_resultant: args.show_resultant !== false,
-    show_angle_labels: Boolean(args.show_angle_labels),
-    incline_deg: parseNumber(args.incline_deg, 0),
+    show_components: showComponents,
+    show_axes: showAxes,
+    show_resultant: showResultant,
+    show_angle_labels: showAngleLabels,
+    incline_deg: inclineDeg,
+    warning: warning || void 0,
     bodies,
     surfaces,
     connectors
@@ -4395,7 +5182,8 @@ __name(sanitizeForceAnalysisPayload, "sanitizeForceAnalysisPayload");
 function sanitizeForceTemplatePayload(args) {
   const template = limitText(args.template, "horizontal", 24);
   const weight = Math.max(0.1, parseNumber(args.weight, 3));
-  const incline = parseNumber(args.incline_deg, 30);
+  const rawIncline = parseNumber(args.incline_deg, 30);
+  const incline = clamp(rawIncline, 1, 85);
   const friction = Math.max(0, parseNumber(args.friction, 0));
   const pull = Math.max(0, parseNumber(args.pull, 0));
   const tension = Math.max(0, parseNumber(args.tension, 0));
@@ -4413,11 +5201,23 @@ function sanitizeForceTemplatePayload(args) {
     const x2 = 470;
     const y2 = 340 - Math.tan(inclineRad) * 290;
     const t = 0.42;
-    const slopeX = x1 + (x2 - x1) * t;
-    const slopeY = y1 + (y2 - y1) * t;
-    const normalOffset = 34;
-    const normalX = Math.sin(inclineRad) * normalOffset;
-    const normalY = Math.cos(inclineRad) * normalOffset;
+    const warning = Math.abs(rawIncline - incline) > 1e-9 ? `incline_deg was clamped from ${rawIncline} to ${incline} to keep the template layout stable` : void 0;
+    const inclineSurface = { kind: "incline", x1, y1, x2, y2, label: `${Math.round(incline)}\xB0` };
+    const inclineBody = {
+      id: "block1",
+      label: bodyLabel,
+      kind: "block",
+      width: 72,
+      height: 48,
+      angle_deg: incline,
+      forces: [
+        { label: "\u91CD\u529B", angle_deg: -90, magnitude: weight, color: gravityColor },
+        { label: "\u652F\u6301\u529B", angle_deg: 90 - incline, magnitude: Math.max(0.1, parseNumber(args.normal, weight * Math.cos(incline * Math.PI / 180))), color: supportColor },
+        { label: "\u6469\u64E6\u529B", angle_deg: 180 - incline, magnitude: friction || weight * 0.25, color: frictionColor },
+        { label: "\u62C9\u529B", angle_deg: 180 - incline, magnitude: pull || weight * 0.35, color: tensionColor }
+      ]
+    };
+    const position = placeBodyOnSurface(inclineBody, inclineSurface, t, -1, 0);
     return sanitizeForceAnalysisPayload({
       title: args.title ?? "Incline force analysis",
       body_label: bodyLabel,
@@ -4426,22 +5226,12 @@ function sanitizeForceTemplatePayload(args) {
       show_axes: args.show_axes ?? true,
       show_resultant: args.show_resultant ?? true,
       show_angle_labels: args.show_angle_labels ?? false,
-      surfaces: [
-        { kind: "incline", x1, y1, x2, y2, label: `${Math.round(incline)}\xB0` }
-      ],
+      warning,
+      surfaces: [inclineSurface],
       bodies: [{
-        id: "block1",
-        label: bodyLabel,
-        kind: "block",
-        x: slopeX - normalX,
-        y: slopeY - normalY,
-        angle_deg: incline,
-        forces: [
-          { label: "\u91CD\u529B", angle_deg: -90, magnitude: weight, color: gravityColor },
-          { label: "\u652F\u6301\u529B", angle_deg: 90 - incline, magnitude: Math.max(0.1, parseNumber(args.normal, weight * Math.cos(incline * Math.PI / 180))), color: supportColor },
-          { label: "\u6469\u64E6\u529B", angle_deg: 180 - incline, magnitude: friction || weight * 0.25, color: frictionColor },
-          { label: "\u62C9\u529B", angle_deg: 180 - incline, magnitude: pull || weight * 0.35, color: tensionColor }
-        ]
+        ...inclineBody,
+        x: position.x,
+        y: position.y
       }]
     });
   }
@@ -5606,13 +6396,25 @@ function normalizePayload(args, path) {
     return {
       __path: "/plot",
       expr: String(args.expr || ""),
+      pieces: ensureArray(args.pieces).map((item) => {
+        const record = item && typeof item === "object" ? item : {};
+        return {
+          expr: String(record.expr || ""),
+          x_min: parseNumber(record.x_min, -10),
+          x_max: parseNumber(record.x_max, 10),
+          label: limitText(record.label, "", MAX_LABEL_LENGTH),
+          name: limitText(record.name, "", MAX_LABEL_LENGTH),
+          color: limitText(record.color, "", 32)
+        };
+      }),
       x_min: parseNumber(args.x_min, -10),
       x_max: parseNumber(args.x_max, 10),
       points: parseInteger(args.points, 1e3),
       title: limitText(args.title, "Function Plot", MAX_TITLE_LENGTH),
       xlabel: limitText(args.xlabel, "x", MAX_LABEL_LENGTH),
       ylabel: limitText(args.ylabel, "y", MAX_LABEL_LENGTH),
-      grid: args.grid ?? true
+      grid: args.grid ?? true,
+      annotations: ensureArray(args.annotations).slice(0, 24)
     };
   }
   if (path === "/plot_multi") {
@@ -5626,7 +6428,8 @@ function normalizePayload(args, path) {
       title: limitText(args.title, "Multi Function Plot", MAX_TITLE_LENGTH),
       xlabel: limitText(args.xlabel, "x", MAX_LABEL_LENGTH),
       ylabel: limitText(args.ylabel, "y", MAX_LABEL_LENGTH),
-      grid: args.grid ?? true
+      grid: args.grid ?? true,
+      annotations: ensureArray(args.annotations).slice(0, 24)
     };
   }
   if (path === "/plot_bar") {
@@ -5638,7 +6441,7 @@ function normalizePayload(args, path) {
       xlabel: limitText(args.xlabel, "Category", MAX_LABEL_LENGTH),
       ylabel: limitText(args.ylabel, "Value", MAX_LABEL_LENGTH),
       grid: args.grid ?? true,
-      series_name: limitText(args.series_name, "Bars", MAX_LABEL_LENGTH)
+      annotations: ensureArray(args.annotations).slice(0, 24)
     };
   }
   return {
@@ -5647,12 +6450,13 @@ function normalizePayload(args, path) {
     title: limitText(args.title, "Series Plot", MAX_TITLE_LENGTH),
     xlabel: limitText(args.xlabel, "x", MAX_LABEL_LENGTH),
     ylabel: limitText(args.ylabel, "y", MAX_LABEL_LENGTH),
-    grid: args.grid ?? true
+    grid: args.grid ?? true,
+    annotations: ensureArray(args.annotations).slice(0, 24)
   };
 }
 __name(normalizePayload, "normalizePayload");
 function isSupportedShortLinkPath(path) {
-  return path === "/png" || path === "/force.svg" || path === "/force-analysis.svg" || path === "/circuit.svg" || path === "/shape3d.html";
+  return path === "/png" || path === "/force.svg" || path === "/force-analysis.svg" || path === "/circuit.svg" || path === "/venn.svg" || path === "/c-memory.svg" || path === "/shape3d.html";
 }
 __name(isSupportedShortLinkPath, "isSupportedShortLinkPath");
 function shortLinkUrl(origin, token) {
@@ -5681,21 +6485,55 @@ async function storeShortLink(env, path, payload) {
 }
 __name(storeShortLink, "storeShortLink");
 async function buildShortUrl(env, path, payload, origin) {
+  const packed = await toCompressedBase64UrlFromJson(payload);
+  if (packed.length <= 3600) return `${origin}${path}?d=${packed}`;
   const token = await storeShortLink(env, path, payload);
   return shortLinkUrl(origin, token);
 }
 __name(buildShortUrl, "buildShortUrl");
 async function buildPlotLinkData(payload, origin, env) {
+  const warnings = collectPayloadWarnings(payload);
   return {
     ok: true,
+    kind: "plot",
+    title: limitText(payload.title, "Plot", MAX_TITLE_LENGTH),
+    warnings,
     mime_type: "image/png",
     png_url: await buildShortUrl(env, "/png", payload, origin),
     payload
   };
 }
 __name(buildPlotLinkData, "buildPlotLinkData");
+function collectPayloadWarnings(payload) {
+  return [payload.warning].filter((item) => typeof item === "string" && item.length > 0);
+}
+__name(collectPayloadWarnings, "collectPayloadWarnings");
+async function buildSvgLinkData(env, path, payload, origin, titleFallback) {
+  return {
+    ok: true,
+    kind: "diagram",
+    title: limitText(payload.title, titleFallback, MAX_TITLE_LENGTH),
+    warnings: collectPayloadWarnings(payload),
+    svg_url: await buildShortUrl(env, path, payload, origin),
+    payload
+  };
+}
+__name(buildSvgLinkData, "buildSvgLinkData");
+async function buildHtmlLinkData(env, path, payload, origin, titleFallback) {
+  return {
+    ok: true,
+    kind: "html3d",
+    title: limitText(payload.title, titleFallback, MAX_TITLE_LENGTH),
+    warnings: collectPayloadWarnings(payload),
+    html_url: await buildShortUrl(env, path, payload, origin),
+    payload
+  };
+}
+__name(buildHtmlLinkData, "buildHtmlLinkData");
 async function pngLinkPayload(args, path, origin, env) {
-  return buildPlotLinkData(normalizePayload(args, path), origin, env);
+  const payload = normalizePayload(args, path);
+  buildSpecFromPayload(payload);
+  return buildPlotLinkData(payload, origin, env);
 }
 __name(pngLinkPayload, "pngLinkPayload");
 async function resolveShortLink(env, token) {
@@ -5732,6 +6570,18 @@ async function renderShortLink(record, env) {
       headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" }
     });
   }
+  if (record.path === "/venn.svg") {
+    return new Response(renderVennDiagramSvg(record.payload), {
+      status: 200,
+      headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" }
+    });
+  }
+  if (record.path === "/c-memory.svg") {
+    return new Response(renderCMemoryDiagramSvg(record.payload), {
+      status: 200,
+      headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" }
+    });
+  }
   if (record.path === "/shape3d.html") {
     return new Response(renderShape3DHtml(record.payload), {
       status: 200,
@@ -5741,6 +6591,609 @@ async function renderShortLink(record, env) {
   return Response.json({ ok: false, error: "bad_short_link_record" }, { status: 400, headers: corsHeaders() });
 }
 __name(renderShortLink, "renderShortLink");
+function getTeachingParams(args) {
+  return args.params && typeof args.params === "object" ? args.params : {};
+}
+__name(getTeachingParams, "getTeachingParams");
+function buildTeachingPlotPayload(args) {
+  const topic = limitText(args.topic, "parabola", 32);
+  const params = getTeachingParams(args);
+  const title = limitText(args.title, "Teaching template", MAX_TITLE_LENGTH);
+  const highlight = args.highlight !== false;
+  if (topic === "definite_integral") {
+    const expr = limitText(params.expr, "x^2", MAX_EXPR_LENGTH);
+    const a2 = parseNumber(params.a, 0);
+    const b = parseNumber(params.b, 2);
+    return normalizePayload({
+      expr,
+      x_min: parseNumber(params.x_min, Math.min(a2, b) - 1),
+      x_max: parseNumber(params.x_max, Math.max(a2, b) + 1),
+      points: parseInteger(params.points, 1200),
+      title: title === "Teaching template" ? `\u5B9A\u79EF\u5206\uFF1A${expr}` : title,
+      xlabel: "x",
+      ylabel: "f(x)",
+      annotations: highlight ? [
+        { kind: "area", x_min: a2, x_max: b, label: `\u79EF\u5206\u533A\u95F4 [${a2}, ${b}]`, color: "#7c3aed", opacity: 0.2 },
+        { kind: "vertical_line", x: a2, label: `\u4E0B\u9650 a=${a2}`, color: "#9333ea" },
+        { kind: "vertical_line", x: b, label: `\u4E0A\u9650 b=${b}`, color: "#9333ea" }
+      ] : []
+    }, "/plot");
+  }
+  if (topic === "tangent_derivative") {
+    const expr = limitText(params.expr, "x^2", MAX_EXPR_LENGTH);
+    const x0 = parseNumber(params.x0, 1);
+    const y0 = parseNumber(params.y0, x0 * x0);
+    const slope = parseNumber(params.slope, 2 * x0);
+    const tangent = `${slope}*(x-${x0})+${y0}`;
+    return normalizePayload({
+      exprs: [expr, tangent],
+      labels: ["\u539F\u51FD\u6570 f(x)", `\u5207\u7EBF\u659C\u7387 f'(${x0})\u2248${slope}`],
+      x_min: parseNumber(params.x_min, x0 - 4),
+      x_max: parseNumber(params.x_max, x0 + 4),
+      points: parseInteger(params.points, 1200),
+      title: title === "Teaching template" ? "\u5BFC\u6570\u7684\u5207\u7EBF\u610F\u4E49" : title,
+      xlabel: "x",
+      ylabel: "y",
+      annotations: highlight ? [
+        { kind: "point", x: x0, y: y0, label: `\u5207\u70B9 (${x0}, ${y0})`, color: "#dc2626" },
+        { kind: "vertical_line", x: x0, label: `x0=${x0}`, color: "#16a34a" },
+        { kind: "label", x: x0 + 0.4, y: y0 + slope, text: `\u659C\u7387\u2248${slope}`, color: "#7c3aed" }
+      ] : []
+    }, "/plot_multi");
+  }
+  if (topic === "fourier_series") {
+    const terms = Math.max(1, Math.min(15, parseInteger(params.terms, 5)));
+    const expr = Array.from({ length: terms }, (_, index) => {
+      const n = 2 * index + 1;
+      return `sin(${n}*x)/${n}`;
+    }).join("+");
+    return normalizePayload({
+      expr: `(4/${Math.PI})*(${expr})`,
+      x_min: parseNumber(params.x_min, -Math.PI),
+      x_max: parseNumber(params.x_max, Math.PI),
+      points: parseInteger(params.points, 1600),
+      title: title === "Teaching template" ? `\u65B9\u6CE2\u5085\u91CC\u53F6\u7EA7\u6570\u8FD1\u4F3C\uFF1A${terms} \u9879` : title,
+      xlabel: "x",
+      ylabel: "S_N(x)",
+      annotations: highlight ? [
+        { kind: "vertical_line", x: 0, label: "\u8DF3\u53D8\u70B9", color: "#dc2626" },
+        { kind: "label", x: 0.35, y: 1.1, text: "Gibbs \u73B0\u8C61\uFF1A\u8DF3\u53D8\u9644\u8FD1\u8FC7\u51B2", color: "#7c3aed" }
+      ] : []
+    }, "/plot");
+  }
+  if (topic === "projectile_motion") {
+    const v0 = parseNumber(params.v0, 20);
+    const angle = parseNumber(params.angle_deg, 45) * Math.PI / 180;
+    const g = Math.max(0.1, parseNumber(params.g, 9.8));
+    const vx = v0 * Math.cos(angle);
+    const vy = v0 * Math.sin(angle);
+    const flight = Math.max(0.1, 2 * vy / g);
+    const range = vx * flight;
+    const peakT = vy / g;
+    const peakX = vx * peakT;
+    const peakY = vy * peakT - 0.5 * g * peakT * peakT;
+    return normalizePayload({
+      expr: `${Math.tan(angle)}*x-${g}/(2*${vx * vx})*x^2`,
+      x_min: 0,
+      x_max: parseNumber(params.x_max, range * 1.08),
+      points: parseInteger(params.points, 1200),
+      title: title === "Teaching template" ? "\u629B\u4F53\u8FD0\u52A8\u8F68\u8FF9" : title,
+      xlabel: "\u6C34\u5E73\u4F4D\u79FB x",
+      ylabel: "\u9AD8\u5EA6 y",
+      annotations: highlight ? [
+        { kind: "point", x: peakX, y: peakY, label: "\u6700\u9AD8\u70B9", color: "#dc2626" },
+        { kind: "point", x: range, y: 0, label: "\u843D\u70B9", color: "#2563eb" },
+        { kind: "label", x: range * 0.08, y: peakY * 0.7, text: `vx=${vx.toFixed(1)}, vy=${vy.toFixed(1)}`, color: "#7c3aed" }
+      ] : []
+    }, "/plot");
+  }
+  if (topic === "simple_harmonic_motion") {
+    const amp = parseNumber(params.amplitude, 1);
+    const omega = Math.max(0.01, parseNumber(params.omega, 2));
+    const tMax = parseNumber(params.t_max, 2 * Math.PI / omega * 2);
+    return normalizePayload({
+      exprs: [`${amp}*cos(${omega}*x)`, `-${amp * omega}*sin(${omega}*x)`, `-${amp * omega * omega}*cos(${omega}*x)`],
+      labels: ["\u4F4D\u79FB x(t)", "\u901F\u5EA6 v(t)", "\u52A0\u901F\u5EA6 a(t)"],
+      x_min: 0,
+      x_max: tMax,
+      points: parseInteger(params.points, 1600),
+      title: title === "Teaching template" ? "\u7B80\u8C10\u632F\u52A8\uFF1A\u4F4D\u79FB\u3001\u901F\u5EA6\u3001\u52A0\u901F\u5EA6" : title,
+      xlabel: "\u65F6\u95F4 t",
+      ylabel: "\u5F52\u4E00\u5316\u91CF",
+      annotations: highlight ? [
+        { kind: "vertical_line", x: Math.PI / (2 * omega), label: "T/4", color: "#7c3aed" },
+        { kind: "label", x: Math.PI / omega, y: amp, text: "a(t) \u4E0E x(t) \u53CD\u76F8", color: "#dc2626" }
+      ] : []
+    }, "/plot_multi");
+  }
+  if (topic === "stress_strain") {
+    const yieldStrain = parseNumber(params.yield_strain, 0.02);
+    const fractureStrain = parseNumber(params.fracture_strain, 0.3);
+    const elasticModulus = parseNumber(params.elastic_modulus, 200);
+    const yieldStress = elasticModulus * yieldStrain;
+    const peakStress = parseNumber(params.peak_stress, yieldStress * 1.8);
+    return normalizePayload({
+      series: [{
+        name: "\u5E94\u529B-\u5E94\u53D8\u66F2\u7EBF",
+        type: "line+scatter",
+        color: "#2563eb",
+        points: [
+          [0, 0],
+          [yieldStrain, yieldStress],
+          [fractureStrain * 0.6, peakStress],
+          [fractureStrain, peakStress * 0.75]
+        ]
+      }],
+      title: title === "Teaching template" ? "\u6750\u6599\u5E94\u529B-\u5E94\u53D8\u66F2\u7EBF" : title,
+      xlabel: "\u5E94\u53D8 \u03B5",
+      ylabel: "\u5E94\u529B \u03C3",
+      annotations: highlight ? [
+        { kind: "point", x: yieldStrain, y: yieldStress, label: "\u5C48\u670D\u70B9", color: "#dc2626" },
+        { kind: "point", x: fractureStrain * 0.6, y: peakStress, label: "\u6297\u62C9\u5F3A\u5EA6", color: "#7c3aed" },
+        { kind: "point", x: fractureStrain, y: peakStress * 0.75, label: "\u65AD\u88C2", color: "#111827" },
+        { kind: "label", x: yieldStrain * 0.35, y: yieldStress * 0.65, text: "\u5F39\u6027\u533A", color: "#16a34a" }
+      ] : []
+    }, "/plot_series");
+  }
+  if (topic === "energy_conservation") {
+    const height = parseNumber(params.height, 10);
+    const g = Math.max(0.1, parseNumber(params.g, 9.8));
+    const total = g * height;
+    return normalizePayload({
+      exprs: [`${g}*(${height}-x)`, `${g}*x`, `${total}`],
+      labels: ["\u91CD\u529B\u52BF\u80FD Ep", "\u52A8\u80FD Ek", "\u673A\u68B0\u80FD E"],
+      x_min: 0,
+      x_max: height,
+      points: parseInteger(params.points, 1200),
+      title: title === "Teaching template" ? "\u673A\u68B0\u80FD\u5B88\u6052\uFF1A\u52BF\u80FD\u4E0E\u52A8\u80FD\u8F6C\u6362" : title,
+      xlabel: "\u4E0B\u843D\u8DDD\u79BB s",
+      ylabel: "\u5355\u4F4D\u8D28\u91CF\u80FD\u91CF",
+      annotations: highlight ? [
+        { kind: "label", x: height * 0.15, y: total * 0.95, text: "\u603B\u673A\u68B0\u80FD\u4FDD\u6301\u4E0D\u53D8", color: "#16a34a" },
+        { kind: "point", x: height / 2, y: total / 2, label: "Ep=Ek", color: "#dc2626" }
+      ] : []
+    }, "/plot_multi");
+  }
+  if (topic === "band_gap") {
+    const gap = Math.max(0, parseNumber(params.gap, 1.1));
+    const valenceTop = 0;
+    const conductionBottom = gap;
+    return normalizePayload({
+      series: [
+        { name: "\u4EF7\u5E26 Ev", type: "line", color: "#2563eb", points: [[0, valenceTop], [1, valenceTop]] },
+        { name: "\u5BFC\u5E26 Ec", type: "line", color: "#dc2626", points: [[0, conductionBottom], [1, conductionBottom]] },
+        { name: "\u8D39\u7C73\u80FD\u7EA7 Ef", type: "line", color: "#16a34a", points: [[0, gap / 2], [1, gap / 2]] }
+      ],
+      title: title === "Teaching template" ? "\u534A\u5BFC\u4F53\u80FD\u5E26\u56FE\uFF1A\u5E26\u9699 Eg" : title,
+      xlabel: "k \u7A7A\u95F4\u793A\u610F",
+      ylabel: "\u80FD\u91CF E",
+      annotations: highlight ? [
+        { kind: "area", x_min: 0, x_max: 1, label: `\u7981\u5E26 Eg=${gap.toFixed(2)} eV`, color: "#f97316", opacity: 0.12 },
+        { kind: "label", x: 0.12, y: conductionBottom + 0.12, text: "\u5BFC\u5E26", color: "#dc2626" },
+        { kind: "label", x: 0.12, y: valenceTop - 0.12, text: "\u4EF7\u5E26", color: "#2563eb" }
+      ] : []
+    }, "/plot_series");
+  }
+  const a = parseNumber(params.a, 1);
+  const h = parseNumber(params.h, 0);
+  const k = parseNumber(params.k, 0);
+  const p = 1 / (4 * a);
+  return normalizePayload({
+    expr: `${a}*(x-${h})^2+${k}`,
+    x_min: parseNumber(params.x_min, h - 5),
+    x_max: parseNumber(params.x_max, h + 5),
+    points: parseInteger(params.points, 1200),
+    title: title === "Teaching template" ? "\u629B\u7269\u7EBF\u5173\u952E\u51E0\u4F55\u91CF" : title,
+    xlabel: "x",
+    ylabel: "y",
+    annotations: highlight ? [
+      { kind: "point", x: h, y: k, label: `\u9876\u70B9 (${h}, ${k})`, color: "#dc2626" },
+      { kind: "point", x: h, y: k + p, label: "\u7126\u70B9", color: "#2563eb" },
+      { kind: "vertical_line", x: h, label: "\u5BF9\u79F0\u8F74", color: "#16a34a" },
+      { kind: "label", x: h + 0.4, y: k - p, text: `\u51C6\u7EBF y=${(k - p).toFixed(2)}`, color: "#7c3aed" }
+    ] : []
+  }, "/plot");
+}
+__name(buildTeachingPlotPayload, "buildTeachingPlotPayload");
+function buildRcCircuitPayload(title) {
+  return buildCircuitScenePayload({
+    title,
+    notes: ["\u7535\u6E90\u901A\u8FC7 R \u7ED9 C \u5145\u7535\uFF0C\u5F62\u6210\u4E00\u9636 RC \u56DE\u8DEF", "\u7535\u5BB9\u7535\u538B\u9010\u6E10\u63A5\u8FD1 V0\uFF0C\u7535\u6D41\u6309\u6307\u6570\u8870\u51CF"],
+    lanes: [
+      {
+        name: "main",
+        items: [
+          { id: "bat", type: "battery", label: "V0" },
+          { id: "r1", type: "resistor", label: "R" },
+          { id: "c1", type: "capacitor", label: "C" },
+          { id: "gnd", type: "ground", label: "\u5730" }
+        ]
+      }
+    ]
+  });
+}
+__name(buildRcCircuitPayload, "buildRcCircuitPayload");
+function buildRcVoltagePayload(args) {
+  const params = getTeachingParams(args);
+  const v0 = parseNumber(params.v0, 5);
+  const tau = Math.max(0.01, parseNumber(params.tau, 1));
+  const tMax = parseNumber(params.t_max, 5 * tau);
+  return normalizePayload({
+    expr: `${v0}*(1-exp(-x/${tau}))`,
+    x_min: 0,
+    x_max: tMax,
+    points: 1200,
+    title: "RC \u7535\u5BB9\u7535\u538B\u4E0A\u5347\u66F2\u7EBF",
+    xlabel: "\u65F6\u95F4 t",
+    ylabel: "\u7535\u5BB9\u7535\u538B Vc(t)",
+    annotations: [
+      { kind: "vertical_line", x: tau, label: "\u03C4=RC", color: "#7c3aed" },
+      { kind: "label", x: tau * 1.08, y: v0 * 0.632, text: "63.2% V0", color: "#7c3aed" }
+    ]
+  }, "/plot");
+}
+__name(buildRcVoltagePayload, "buildRcVoltagePayload");
+function buildRcCurrentPayload(args) {
+  const params = getTeachingParams(args);
+  const i0 = parseNumber(params.i0, 1);
+  const tau = Math.max(0.01, parseNumber(params.tau, 1));
+  const tMax = parseNumber(params.t_max, 5 * tau);
+  return normalizePayload({
+    expr: `${i0}*exp(-x/${tau})`,
+    x_min: 0,
+    x_max: tMax,
+    points: 1200,
+    title: "RC \u5145\u7535\u7535\u6D41\u8870\u51CF\u66F2\u7EBF",
+    xlabel: "\u65F6\u95F4 t",
+    ylabel: "\u7535\u6D41 i(t)",
+    annotations: [{ kind: "vertical_line", x: tau, label: "\u03C4=RC", color: "#7c3aed" }]
+  }, "/plot");
+}
+__name(buildRcCurrentPayload, "buildRcCurrentPayload");
+function buildRlcTransientPayload(args) {
+  const params = getTeachingParams(args);
+  const alpha = Math.max(0.01, parseNumber(params.alpha, 0.25));
+  const omega = Math.max(0.01, parseNumber(params.omega, 4));
+  const v0 = parseNumber(params.v0, 1);
+  const tMax = parseNumber(params.t_max, 8 / alpha);
+  return normalizePayload({
+    expr: `${v0}*exp(-${alpha}*x)*cos(${omega}*x)`,
+    x_min: 0,
+    x_max: tMax,
+    points: 1800,
+    title: "RLC \u6B20\u963B\u5C3C\u6682\u6001\u54CD\u5E94",
+    xlabel: "\u65F6\u95F4 t",
+    ylabel: "\u5F52\u4E00\u5316\u54CD\u5E94",
+    annotations: [
+      { kind: "label", x: 1 / alpha, y: v0 * 0.37, text: "\u5305\u7EDC e^{-\u03B1t}", color: "#7c3aed" },
+      { kind: "vertical_line", x: Math.PI / omega, label: "\u534A\u5468\u671F", color: "#2563eb" }
+    ]
+  }, "/plot");
+}
+__name(buildRlcTransientPayload, "buildRlcTransientPayload");
+function buildVennProbabilityPayload(args, stage = "formula") {
+  const params = getTeachingParams(args);
+  const title = limitText(args.title, "Venn probability", MAX_TITLE_LENGTH);
+  const a = limitText(params.a_label, "A", MAX_LABEL_LENGTH);
+  const b = limitText(params.b_label, "B", MAX_LABEL_LENGTH);
+  const pA = parseNumber(params.p_a, 0.6);
+  const pB = parseNumber(params.p_b, 0.5);
+  const pAB = Math.max(0, Math.min(Math.min(pA, pB), parseNumber(params.p_ab, 0.2)));
+  const union = Math.max(0, Math.min(1, pA + pB - pAB));
+  const outside = Math.max(0, Math.min(1, 1 - union));
+  const aOnly = Math.max(0, pA - pAB);
+  const bOnly = Math.max(0, pB - pAB);
+  const regions = stage === "intersection" ? { A_B: `P(${a}\u2229${b})=${pAB.toFixed(2)}` } : stage === "union" ? { A_only: `${a}\u72EC\u6709=${aOnly.toFixed(2)}`, A_B: `\u4EA4\u96C6=${pAB.toFixed(2)}`, B_only: `${b}\u72EC\u6709=${bOnly.toFixed(2)}`, outside: `\u5916\u90E8=${outside.toFixed(2)}` } : { A_only: `P(${a})`, A_B: `\u4EA4\u96C6`, B_only: `P(${b})`, outside: `1-P(${a}\u222A${b})` };
+  return sanitizeVennPayload({
+    title: title === "Venn probability" ? `P(${a}\u222A${b}) = P(${a}) + P(${b}) - P(${a}\u2229${b})` : title,
+    sets: [
+      { label: a, color: "#60a5fa" },
+      { label: b, color: "#f97316" }
+    ],
+    regions
+  });
+}
+__name(buildVennProbabilityPayload, "buildVennProbabilityPayload");
+function buildCPointerArrayPayload(args, stage = "array") {
+  const params = getTeachingParams(args);
+  const title = limitText(args.title, "C pointer and array memory", MAX_TITLE_LENGTH);
+  const base = Math.max(0, Math.floor(parseNumber(params.base_address, 4096)));
+  const values = ensureArray(params.values).length > 0 ? ensureArray(params.values).slice(0, 6) : [10, 20, 30, 40];
+  const elementType = limitText(params.type, "int", MAX_LABEL_LENGTH);
+  const elementBytes = Math.max(1, Math.min(16, parseInteger(params.element_bytes, 4)));
+  const blocks = values.map((value, index) => ({
+    name: `arr[${index}]`,
+    type: elementType,
+    value: String(value),
+    address: `0x${(base + index * elementBytes).toString(16)}`,
+    bytes: [String(value)],
+    note: index === 0 ? "\u6570\u7EC4\u540D arr \u8868\u793A\u9996\u5143\u7D20\u5730\u5740" : `arr+${index} \u5411\u540E\u79FB\u52A8 ${index * elementBytes} \u5B57\u8282`
+  }));
+  if (stage !== "array") {
+    blocks.unshift({
+      name: "p",
+      type: `${elementType}*`,
+      value: stage === "dereference" ? `*(arr+1)=${String(values[1] ?? values[0])}` : "arr",
+      address: `0x${(base - elementBytes).toString(16)}`,
+      bytes: [`0x${base.toString(16)}`],
+      note: stage === "dereference" ? "\u89E3\u5F15\u7528\u4F1A\u8BFB\u53D6\u76EE\u6807\u5730\u5740\u91CC\u7684\u503C" : "\u6307\u9488\u53D8\u91CF\u4FDD\u5B58\u5730\u5740\uFF0C\u4E0D\u4FDD\u5B58\u6574\u4E2A\u6570\u7EC4"
+    });
+  }
+  return sanitizeCMemoryPayload({
+    title: title === "C pointer and array memory" ? "C \u6570\u7EC4\u9000\u5316\u4E0E\u6307\u9488\u8FD0\u7B97" : title,
+    blocks
+  });
+}
+__name(buildCPointerArrayPayload, "buildCPointerArrayPayload");
+function buildCStructLayoutPayload(args, stage = "layout") {
+  const params = getTeachingParams(args);
+  const rawFields = ensureArray(params.fields);
+  const fields = rawFields.length > 0 ? rawFields.slice(0, 8) : [
+    { name: "id", type: "int", size: 4 },
+    { name: "grade", type: "char", size: 1 },
+    { name: "score", type: "double", size: 8 }
+  ];
+  let offset = 0;
+  const blocks = fields.map((field) => {
+    const record = field && typeof field === "object" ? field : {};
+    const name = limitText(record.name, "field", MAX_LABEL_LENGTH);
+    const type = limitText(record.type, "int", MAX_LABEL_LENGTH);
+    const size = Math.max(1, Math.min(16, parseInteger(record.size, type === "double" ? 8 : type === "char" ? 1 : 4)));
+    const align = Math.min(8, size);
+    const padding = (align - offset % align) % align;
+    if (padding > 0) offset += padding;
+    const address = offset;
+    offset += size;
+    return {
+      name,
+      type,
+      value: `${size}B`,
+      address: `+${address}`,
+      bytes: [`${size} \u5B57\u8282`],
+      note: padding > 0 ? `\u524D\u9762\u63D2\u5165 ${padding} \u5B57\u8282 padding \u4EE5\u6EE1\u8DB3\u5BF9\u9F50` : "\u5B57\u6BB5\u6309\u5BF9\u9F50\u8981\u6C42\u653E\u5165\u7ED3\u6784\u4F53"
+    };
+  });
+  if (stage === "padding") {
+    blocks.unshift({ name: "padding", type: "\u5BF9\u9F50\u586B\u5145", value: "\u9690\u85CF\u5B57\u8282", address: "+?", bytes: ["pad"], note: "padding \u4E0D\u5C5E\u4E8E\u4EFB\u4F55\u5B57\u6BB5\uFF0C\u4F46\u4F1A\u589E\u52A0 sizeof(struct)" });
+  }
+  if (stage === "sizeof") {
+    const tailPadding = (8 - offset % 8) % 8;
+    if (tailPadding > 0) offset += tailPadding;
+    blocks.push({ name: "sizeof", type: "\u603B\u5927\u5C0F", value: `${offset}B`, address: "", bytes: [`${offset} \u5B57\u8282`], note: "\u7ED3\u6784\u4F53\u6570\u7EC4\u8981\u6C42\u6BCF\u4E2A\u5143\u7D20\u8D77\u59CB\u5730\u5740\u4E5F\u6EE1\u8DB3\u6700\u5927\u5BF9\u9F50" });
+  }
+  return sanitizeCMemoryPayload({ title: "C \u7ED3\u6784\u4F53\u5185\u5B58\u5E03\u5C40\u4E0E padding / sizeof", blocks });
+}
+__name(buildCStructLayoutPayload, "buildCStructLayoutPayload");
+async function buildTeachingTemplate(args, env, origin) {
+  const topic = limitText(args.topic, "parabola", 32);
+  if (topic === "venn_probability") {
+    return buildSvgLinkData(env, "/venn.svg", buildVennProbabilityPayload(args), origin, "Venn probability");
+  }
+  if (topic === "c_pointer_array") {
+    return buildSvgLinkData(env, "/c-memory.svg", buildCPointerArrayPayload(args), origin, "C pointer and array memory");
+  }
+  if (topic === "c_struct_layout") {
+    return buildSvgLinkData(env, "/c-memory.svg", buildCStructLayoutPayload(args), origin, "C struct layout");
+  }
+  if (topic === "rc_charging") {
+    const circuitPayload = buildRcCircuitPayload(limitText(args.title, "RC \u5145\u7535\u7535\u8DEF", MAX_TITLE_LENGTH));
+    return buildSvgLinkData(env, "/circuit.svg", circuitPayload, origin, "RC \u5145\u7535\u7535\u8DEF");
+  }
+  if (topic === "incline_force") {
+    const params = getTeachingParams(args);
+    const payload = sanitizeForceTemplatePayload({ ...params, title: args.title ?? "\u659C\u9762\u53D7\u529B\u5206\u6790", template: "incline" });
+    return buildSvgLinkData(env, "/force-analysis.svg", payload, origin, "\u659C\u9762\u53D7\u529B\u5206\u6790");
+  }
+  if (topic === "rlc_transient") {
+    return buildPlotLinkData(buildRlcTransientPayload(args), origin, env);
+  }
+  return buildPlotLinkData(buildTeachingPlotPayload(args), origin, env);
+}
+__name(buildTeachingTemplate, "buildTeachingTemplate");
+async function buildTeachingSequence(args, env, origin) {
+  const topic = limitText(args.topic, "rc_charging", 32);
+  if (topic === "tangent_derivative") {
+    const params = getTeachingParams(args);
+    const x0 = parseNumber(params.x0, 1);
+    const y0 = parseNumber(params.y0, x0 * x0);
+    const slope = parseNumber(params.slope, 2 * x0);
+    const base = buildTeachingPlotPayload({ ...args, params: { ...params, x0, y0, slope } });
+    const derivative = normalizePayload({
+      expr: limitText(params.derivative_expr, "2*x", MAX_EXPR_LENGTH),
+      x_min: parseNumber(params.x_min, x0 - 4),
+      x_max: parseNumber(params.x_max, x0 + 4),
+      points: parseInteger(params.points, 1200),
+      title: "\u5BFC\u51FD\u6570\u7ED9\u51FA\u6BCF\u4E00\u70B9\u659C\u7387",
+      xlabel: "x",
+      ylabel: "f'(x)",
+      annotations: [{ kind: "point", x: x0, y: slope, label: `f'(${x0})\u2248${slope}`, color: "#dc2626" }]
+    }, "/plot");
+    const items2 = [
+      { title: "1. \u51FD\u6570\u4E0E\u5207\u7EBF", kind: "plot", png_url: await buildShortUrl(env, "/png", base, origin), explanation: "\u5207\u70B9\u9644\u8FD1\u7528\u76F4\u7EBF\u8FD1\u4F3C\u66F2\u7EBF\uFF0C\u5207\u7EBF\u659C\u7387\u5C31\u662F\u8BE5\u70B9\u5BFC\u6570\u3002", payload: base },
+      { title: "2. \u5BFC\u51FD\u6570\u8BFB\u659C\u7387", kind: "plot", png_url: await buildShortUrl(env, "/png", derivative, origin), explanation: "\u5BFC\u51FD\u6570\u56FE\u50CF\u7684\u7EB5\u5750\u6807\u8868\u793A\u539F\u51FD\u6570\u5728\u540C\u4E00 x \u5904\u7684\u77AC\u65F6\u53D8\u5316\u7387\u3002", payload: derivative }
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Derivative tangent sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "fourier_series") {
+    const params = getTeachingParams(args);
+    const stages = [1, 3, Math.max(5, Math.min(15, parseInteger(params.terms, 7)))];
+    const items2 = await Promise.all(stages.map(async (terms, index) => {
+      const payload = buildTeachingPlotPayload({ ...args, params: { ...params, terms }, title: `${index + 1}. ${terms} \u9879\u5085\u91CC\u53F6\u8FD1\u4F3C` });
+      return { title: `${index + 1}. ${terms} \u9879\u8FD1\u4F3C`, kind: "plot", png_url: await buildShortUrl(env, "/png", payload, origin), explanation: terms === 1 ? "\u53EA\u4FDD\u7559\u57FA\u6CE2\uFF0C\u80FD\u770B\u51FA\u4E3B\u8981\u5468\u671F\u3002" : "\u589E\u52A0\u9AD8\u6B21\u8C10\u6CE2\u540E\uFF0C\u65B9\u6CE2\u8FB9\u7F18\u66F4\u9661\uFF0C\u4F46\u8DF3\u53D8\u9644\u8FD1\u4ECD\u6709\u8FC7\u51B2\u3002", payload };
+    }));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Fourier series sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "rlc_transient") {
+    const params = getTeachingParams(args);
+    const stages = [
+      { alpha: parseNumber(params.alpha, 0.8), title: "1. \u963B\u5C3C\u8F83\u5F3A" },
+      { alpha: parseNumber(params.alpha_mid, 0.35), title: "2. \u6B20\u963B\u5C3C\u632F\u8361" },
+      { alpha: parseNumber(params.alpha_low, 0.12), title: "3. \u963B\u5C3C\u8F83\u5F31" }
+    ];
+    const items2 = await Promise.all(stages.map(async (stage) => {
+      const payload = buildRlcTransientPayload({ ...args, params: { ...params, alpha: stage.alpha }, title: stage.title });
+      payload.title = stage.title;
+      return { title: stage.title, kind: "plot", png_url: await buildShortUrl(env, "/png", payload, origin), explanation: "\u03B1 \u8D8A\u5C0F\uFF0C\u632F\u8361\u8870\u51CF\u8D8A\u6162\uFF1B\u03B1 \u8D8A\u5927\uFF0C\u80FD\u91CF\u635F\u8017\u8D8A\u5FEB\u3002", payload };
+    }));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "RLC transient sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "projectile_motion") {
+    const params = getTeachingParams(args);
+    const stages = [
+      { title: "1. \u8FD0\u52A8\u8F68\u8FF9", angle_deg: parseNumber(params.angle_deg, 45) },
+      { title: "2. \u4F4E\u89D2\u5EA6\u5C04\u7A0B", angle_deg: parseNumber(params.low_angle_deg, 30) },
+      { title: "3. \u9AD8\u89D2\u5EA6\u5C04\u9AD8", angle_deg: parseNumber(params.high_angle_deg, 60) }
+    ];
+    const items2 = await Promise.all(stages.map(async (stage) => {
+      const payload = buildTeachingPlotPayload({ ...args, params: { ...params, angle_deg: stage.angle_deg }, title: stage.title });
+      return { title: stage.title, kind: "plot", png_url: await buildShortUrl(env, "/png", payload, origin), explanation: "\u6C34\u5E73\u901F\u5EA6\u4FDD\u6301\u4E0D\u53D8\uFF0C\u7AD6\u76F4\u65B9\u5411\u53D7\u91CD\u529B\u4EA7\u751F\u5300\u52A0\u901F\u8FD0\u52A8\u3002", payload };
+    }));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Projectile motion sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "simple_harmonic_motion") {
+    const params = getTeachingParams(args);
+    const displacement = buildTeachingPlotPayload({ ...args, title: "1. \u4F4D\u79FB\u3001\u901F\u5EA6\u3001\u52A0\u901F\u5EA6\u76F8\u4F4D\u5173\u7CFB" });
+    const energy = normalizePayload({
+      exprs: ["cos(x)^2", "sin(x)^2", "1"],
+      labels: ["\u52BF\u80FD Ep", "\u52A8\u80FD Ek", "\u603B\u80FD\u91CF E"],
+      x_min: 0,
+      x_max: parseNumber(params.t_max, 2 * Math.PI),
+      points: 1200,
+      title: "2. \u7B80\u8C10\u632F\u52A8\u80FD\u91CF\u8F6C\u6362",
+      xlabel: "\u76F8\u4F4D \u03C9t",
+      ylabel: "\u5F52\u4E00\u5316\u80FD\u91CF",
+      annotations: [{ kind: "label", x: Math.PI / 2, y: 1, text: "\u52A8\u80FD\u548C\u52BF\u80FD\u4E92\u76F8\u8F6C\u5316\uFF0C\u603B\u80FD\u91CF\u5B88\u6052", color: "#7c3aed" }]
+    }, "/plot_multi");
+    const items2 = [
+      { title: "1. \u76F8\u4F4D\u5173\u7CFB", kind: "plot", png_url: await buildShortUrl(env, "/png", displacement, origin), explanation: "\u901F\u5EA6\u6BD4\u4F4D\u79FB\u8D85\u524D \u03C0/2\uFF0C\u52A0\u901F\u5EA6\u4E0E\u4F4D\u79FB\u53CD\u76F8\u3002", payload: displacement },
+      { title: "2. \u80FD\u91CF\u8F6C\u6362", kind: "plot", png_url: await buildShortUrl(env, "/png", energy, origin), explanation: "\u52A8\u80FD\u548C\u52BF\u80FD\u5468\u671F\u6027\u4EA4\u6362\uFF0C\u603B\u673A\u68B0\u80FD\u4FDD\u6301\u4E0D\u53D8\u3002", payload: energy }
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Simple harmonic motion sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "stress_strain") {
+    const template = buildTeachingPlotPayload(args);
+    const brittle = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), yield_strain: 0.01, fracture_strain: 0.06, peak_stress: 8 }, title: "1. \u8106\u6027\u6750\u6599" });
+    const ductile = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), yield_strain: 0.03, fracture_strain: 0.35, peak_stress: 9 }, title: "2. \u5EF6\u6027\u6750\u6599" });
+    const items2 = [
+      { title: "1. \u6807\u51C6\u9636\u6BB5", kind: "plot", png_url: await buildShortUrl(env, "/png", template, origin), explanation: "\u66F2\u7EBF\u4F9D\u6B21\u5C55\u793A\u5F39\u6027\u533A\u3001\u5C48\u670D\u3001\u5F3A\u5316\u4E0E\u65AD\u88C2\u3002", payload: template },
+      { title: "2. \u8106\u6027\u6750\u6599", kind: "plot", png_url: await buildShortUrl(env, "/png", brittle, origin), explanation: "\u8106\u6027\u6750\u6599\u5851\u6027\u53D8\u5F62\u5C0F\uFF0C\u65AD\u88C2\u5E94\u53D8\u8F83\u4F4E\u3002", payload: brittle },
+      { title: "3. \u5EF6\u6027\u6750\u6599", kind: "plot", png_url: await buildShortUrl(env, "/png", ductile, origin), explanation: "\u5EF6\u6027\u6750\u6599\u65AD\u88C2\u524D\u6709\u66F4\u957F\u7684\u5851\u6027\u53D8\u5F62\u9636\u6BB5\u3002", payload: ductile }
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Stress strain sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "c_struct_layout") {
+    const payloads = [buildCStructLayoutPayload(args, "layout"), buildCStructLayoutPayload(args, "padding"), buildCStructLayoutPayload(args, "sizeof")];
+    const explanations = ["\u5B57\u6BB5\u6309\u58F0\u660E\u987A\u5E8F\u653E\u7F6E\uFF0C\u4F46\u4F1A\u53D7\u5BF9\u9F50\u7EA6\u675F\u5F71\u54CD\u3002", "padding \u662F\u7F16\u8BD1\u5668\u63D2\u5165\u7684\u9690\u85CF\u7A7A\u6D1E\u3002", "sizeof(struct) \u5305\u542B\u5B57\u6BB5\u3001\u5185\u90E8 padding \u548C\u5C3E\u90E8 padding\u3002"];
+    const items2 = await Promise.all(payloads.map(async (payload, index) => ({
+      title: `${index + 1}. ${index === 0 ? "\u5B57\u6BB5\u5E03\u5C40" : index === 1 ? "\u5BF9\u9F50\u586B\u5145" : "sizeof \u603B\u5927\u5C0F"}`,
+      kind: "diagram",
+      svg_url: await buildShortUrl(env, "/c-memory.svg", payload, origin),
+      explanation: explanations[index],
+      warnings: collectPayloadWarnings(payload),
+      payload
+    })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "C struct layout sequence", MAX_TITLE_LENGTH), warnings: items2.flatMap((item) => item.warnings), count: items2.length, items: items2 };
+  }
+  if (topic === "energy_conservation") {
+    const energy = buildTeachingPlotPayload(args);
+    const params = getTeachingParams(args);
+    const height = parseNumber(params.height, 10);
+    const g = Math.max(0.1, parseNumber(params.g, 9.8));
+    const velocity = normalizePayload({
+      expr: `sqrt(2*${g}*x)`,
+      x_min: 0,
+      x_max: height,
+      points: 1200,
+      title: "\u7531\u80FD\u91CF\u5B88\u6052\u63A8\u51FA\u901F\u5EA6",
+      xlabel: "\u4E0B\u843D\u8DDD\u79BB s",
+      ylabel: "\u901F\u5EA6 v",
+      annotations: [{ kind: "label", x: height * 0.35, y: Math.sqrt(2 * g * height) * 0.7, text: "v=sqrt(2gs)", color: "#7c3aed" }]
+    }, "/plot");
+    const items2 = [
+      { title: "1. \u80FD\u91CF\u8F6C\u6362", kind: "plot", png_url: await buildShortUrl(env, "/png", energy, origin), explanation: "\u52BF\u80FD\u51CF\u5C11\u91CF\u7B49\u4E8E\u52A8\u80FD\u589E\u52A0\u91CF\uFF0C\u603B\u673A\u68B0\u80FD\u4E0D\u53D8\u3002", payload: energy },
+      { title: "2. \u901F\u5EA6\u968F\u4E0B\u843D\u8DDD\u79BB\u53D8\u5316", kind: "plot", png_url: await buildShortUrl(env, "/png", velocity, origin), explanation: "\u5FFD\u7565\u963B\u529B\u65F6\uFF0C\u4E0B\u843D\u8D8A\u8FDC\u901F\u5EA6\u8D8A\u5927\u3002", payload: velocity }
+    ];
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Energy conservation sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "band_gap") {
+    const semiconductor = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: parseNumber(getTeachingParams(args).gap, 1.1) }, title: "1. \u534A\u5BFC\u4F53" });
+    const conductor = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: 0 }, title: "2. \u5BFC\u4F53\uFF1A\u65E0\u660E\u663E\u7981\u5E26" });
+    const insulator = buildTeachingPlotPayload({ ...args, params: { ...getTeachingParams(args), gap: 5 }, title: "3. \u7EDD\u7F18\u4F53\uFF1A\u5BBD\u7981\u5E26" });
+    const payloads = [semiconductor, conductor, insulator];
+    const explanations = ["\u534A\u5BFC\u4F53\u5E26\u9699\u9002\u4E2D\uFF0C\u70ED\u6FC0\u53D1\u6216\u63BA\u6742\u53EF\u4EA7\u751F\u8F7D\u6D41\u5B50\u3002", "\u5BFC\u4F53\u4EF7\u5E26\u4E0E\u5BFC\u5E26\u91CD\u53E0\u6216\u7981\u5E26\u8FD1\u4F3C\u4E3A\u96F6\u3002", "\u7EDD\u7F18\u4F53\u5E26\u9699\u5F88\u5BBD\uFF0C\u5E38\u6E29\u4E0B\u96BE\u4EE5\u6FC0\u53D1\u8F7D\u6D41\u5B50\u3002"];
+    const items2 = await Promise.all(payloads.map(async (payload, index) => ({ title: String(payload.title), kind: "plot", png_url: await buildShortUrl(env, "/png", payload, origin), explanation: explanations[index], payload })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Band gap sequence", MAX_TITLE_LENGTH), warnings: [], count: items2.length, items: items2 };
+  }
+  if (topic === "venn_probability") {
+    const payloads = [
+      buildVennProbabilityPayload(args, "formula"),
+      buildVennProbabilityPayload(args, "intersection"),
+      buildVennProbabilityPayload(args, "union")
+    ];
+    const explanations = [
+      "\u5148\u628A\u4E24\u4E2A\u4E8B\u4EF6\u653E\u8FDB\u540C\u4E00\u4E2A\u6837\u672C\u7A7A\u95F4\uFF0C\u660E\u786E A \u4E0E B \u4F1A\u91CD\u53E0\u3002",
+      "\u4EA4\u96C6 A\u2229B \u662F\u4F1A\u88AB P(A)+P(B) \u91CD\u590D\u8BA1\u7B97\u7684\u4E00\u5757\u3002",
+      "\u5E76\u96C6 A\u222AB \u7B49\u4E8E\u4E24\u8FB9\u76F8\u52A0\u540E\u51CF\u6389\u91CD\u590D\u7684\u4EA4\u96C6\u3002"
+    ];
+    const items2 = await Promise.all(payloads.map(async (payload, index) => ({
+      title: `${index + 1}. ${index === 0 ? "\u6837\u672C\u7A7A\u95F4\u4E0E\u4E8B\u4EF6" : index === 1 ? "\u6807\u51FA\u4EA4\u96C6" : "\u5F97\u5230\u5E76\u96C6\u516C\u5F0F"}`,
+      kind: "diagram",
+      svg_url: await buildShortUrl(env, "/venn.svg", payload, origin),
+      explanation: explanations[index],
+      warnings: collectPayloadWarnings(payload),
+      payload
+    })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Venn probability sequence", MAX_TITLE_LENGTH), warnings: items2.flatMap((item) => item.warnings), count: items2.length, items: items2 };
+  }
+  if (topic === "c_pointer_array") {
+    const payloads = [
+      buildCPointerArrayPayload(args, "array"),
+      buildCPointerArrayPayload(args, "pointer"),
+      buildCPointerArrayPayload(args, "dereference")
+    ];
+    const explanations = [
+      "\u6570\u7EC4\u5143\u7D20\u5728\u5185\u5B58\u4E2D\u8FDE\u7EED\u6392\u5217\uFF0C\u5730\u5740\u6309\u5143\u7D20\u5927\u5C0F\u9012\u589E\u3002",
+      "\u6307\u9488\u53D8\u91CF p \u5B58\u7684\u662F\u5730\u5740\uFF1Barr \u5728\u8868\u8FBE\u5F0F\u91CC\u5E38\u9000\u5316\u4E3A\u9996\u5143\u7D20\u5730\u5740\u3002",
+      "*(arr+1) \u5148\u79FB\u52A8\u4E00\u4E2A\u5143\u7D20\u5BBD\u5EA6\uFF0C\u518D\u8BFB\u53D6\u76EE\u6807\u5730\u5740\u4E2D\u7684\u503C\u3002"
+    ];
+    const items2 = await Promise.all(payloads.map(async (payload, index) => ({
+      title: `${index + 1}. ${index === 0 ? "\u6570\u7EC4\u8FDE\u7EED\u5B58\u50A8" : index === 1 ? "\u6307\u9488\u4FDD\u5B58\u5730\u5740" : "\u89E3\u5F15\u7528\u8BFB\u53D6\u503C"}`,
+      kind: "diagram",
+      svg_url: await buildShortUrl(env, "/c-memory.svg", payload, origin),
+      explanation: explanations[index],
+      warnings: collectPayloadWarnings(payload),
+      payload
+    })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "C pointer array sequence", MAX_TITLE_LENGTH), warnings: items2.flatMap((item) => item.warnings), count: items2.length, items: items2 };
+  }
+  if (topic === "incline_force") {
+    const params = getTeachingParams(args);
+    const rawIncline = parseNumber(params.incline_deg, 30);
+    const stage1 = sanitizeForceTemplatePayload({ ...params, template: "incline", title: "1. \u60C5\u666F\u4E0E\u5168\u90E8\u53D7\u529B", show_components: false, show_resultant: false });
+    const stage2 = sanitizeForceTemplatePayload({ ...params, template: "incline", title: "2. \u5206\u89E3\u91CD\u529B\u5230\u659C\u9762\u65B9\u5411", show_components: true, show_resultant: false });
+    const stage3 = sanitizeForceTemplatePayload({ ...params, template: "incline", title: "3. \u5224\u65AD\u5408\u529B\u65B9\u5411", show_components: true, show_resultant: true });
+    const payloads = [stage1, stage2, stage3];
+    const items2 = await Promise.all(payloads.map(async (payload, index) => ({
+      title: limitText(payload.title, `Incline force step ${index + 1}`, MAX_TITLE_LENGTH),
+      kind: "diagram",
+      svg_url: await buildShortUrl(env, "/force-analysis.svg", payload, origin),
+      explanation: index === 0 ? `\u659C\u9762\u89D2\u53D6 ${payload.incline_deg}\xB0${rawIncline !== payload.incline_deg ? "\uFF0C\u5DF2\u4E3A\u7A33\u5B9A\u6392\u7248\u505A\u94B3\u5236" : ""}` : index === 1 ? "\u628A\u91CD\u529B\u5206\u89E3\u4E3A\u6CBF\u659C\u9762\u4E0E\u5782\u76F4\u659C\u9762\u7684\u5206\u91CF" : "\u6BD4\u8F83\u6CBF\u659C\u9762\u65B9\u5411\u7684\u529B\uFF0C\u786E\u5B9A\u5408\u529B\u4E0E\u8FD0\u52A8\u8D8B\u52BF",
+      warnings: collectPayloadWarnings(payload),
+      payload
+    })));
+    return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "Incline force sequence", MAX_TITLE_LENGTH), warnings: items2.flatMap((item) => item.warnings), count: items2.length, items: items2 };
+  }
+  const circuitPayload = buildRcCircuitPayload("1. RC \u5145\u7535\u7535\u8DEF");
+  const voltagePayload = buildRcVoltagePayload(args);
+  const currentPayload = buildRcCurrentPayload(args);
+  const items = [
+    { title: "1. RC \u5145\u7535\u7535\u8DEF", kind: "diagram", svg_url: await buildShortUrl(env, "/circuit.svg", circuitPayload, origin), explanation: "\u7535\u6E90\u901A\u8FC7\u7535\u963B\u7ED9\u7535\u5BB9\u5145\u7535\uFF0C\u65F6\u95F4\u5E38\u6570 \u03C4=RC\u3002", payload: circuitPayload },
+    { title: "2. \u7535\u5BB9\u7535\u538B\u4E0A\u5347", kind: "plot", png_url: await buildShortUrl(env, "/png", voltagePayload, origin), explanation: "Vc(t)=V0(1-e^{-t/\u03C4})\uFF0Ct=\u03C4 \u65F6\u7EA6\u4E3A 63.2% V0\u3002", payload: voltagePayload },
+    { title: "3. \u7535\u6D41\u6307\u6570\u8870\u51CF", kind: "plot", png_url: await buildShortUrl(env, "/png", currentPayload, origin), explanation: "i(t)=I0e^{-t/\u03C4}\uFF0C\u521D\u59CB\u6700\u5927\u540E\u9010\u6E10\u8D8B\u8FD1 0\u3002", payload: currentPayload }
+  ];
+  return { ok: true, kind: "teaching_sequence", title: limitText(args.title, "RC charging sequence", MAX_TITLE_LENGTH), warnings: [], count: items.length, items };
+}
+__name(buildTeachingSequence, "buildTeachingSequence");
 function buildSpecFromPayload(payload) {
   const path = String(payload.__path || "/plot");
   const cleaned = { ...payload };
@@ -5779,30 +7232,48 @@ async function handleToolCall(name, args, env, origin) {
     }
     case "force_diagram_link": {
       const payload = sanitizeForcePayload(args);
-      return { ok: true, status: 200, data: { svg_url: await buildShortUrl(env, "/force.svg", payload, origin), payload } };
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/force.svg", payload, origin, "Force diagram") };
     }
     case "force_analysis_link": {
       const payload = sanitizeForceAnalysisPayload(args);
-      return { ok: true, status: 200, data: { svg_url: await buildShortUrl(env, "/force-analysis.svg", payload, origin), payload } };
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/force-analysis.svg", payload, origin, "Force analysis") };
     }
     case "force_analysis_template_link": {
       const payload = sanitizeForceTemplatePayload(args);
-      return { ok: true, status: 200, data: { svg_url: await buildShortUrl(env, "/force-analysis.svg", payload, origin), payload } };
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/force-analysis.svg", payload, origin, "Force analysis template") };
     }
     case "circuit_diagram_link": {
       const linkMode = classifyCircuitLinkPayload(args);
       const packedPayload = buildCompactCircuitLinkPayload(args, linkMode);
       const payload = sanitizeCircuitPayloadFromArgs(packedPayload);
-      return { ok: true, status: 200, data: { svg_url: await buildShortUrl(env, "/circuit.svg", packedPayload, origin), payload } };
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/circuit.svg", packedPayload, origin, "Circuit diagram") };
     }
     case "circuit_template_link": {
       const packedPayload = buildCompactCircuitLinkPayload(args, "template");
       const payload = sanitizeCircuitTemplatePayload(args);
-      return { ok: true, status: 200, data: { svg_url: await buildShortUrl(env, "/circuit.svg", packedPayload, origin), payload } };
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/circuit.svg", packedPayload, origin, "Circuit template") };
+    }
+    case "venn_diagram_link": {
+      const payload = sanitizeVennPayload(args);
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/venn.svg", payload, origin, "Venn diagram") };
+    }
+    case "c_memory_diagram_link": {
+      const payload = sanitizeCMemoryPayload(args);
+      return { ok: true, status: 200, data: await buildSvgLinkData(env, "/c-memory.svg", payload, origin, "C memory layout") };
     }
     case "shape3d_link": {
       const payload = sanitizeShapePayload(args);
-      return { ok: true, status: 200, data: { html_url: await buildShortUrl(env, "/shape3d.html", payload, origin), payload } };
+      // Generate static SVG preview for MCP clients that only display svg_url
+      const svgPreview = renderSurfacePreviewSvg(payload);
+      return { ok: true, status: 200, data: {
+        ok: true,
+        kind: "html3d",
+        title: limitText(payload.title, "3D shape", MAX_TITLE_LENGTH),
+        warnings: collectPayloadWarnings(payload),
+        svg_url: await buildShortUrl(env, "/circuit.svg", { __svg_preview: true, svg: svgPreview }, origin),
+        html_url: await buildShortUrl(env, "/shape3d.html", payload, origin),
+        payload
+      }};
     }
     case "plot_bar_json": {
       return { ok: true, status: 200, data: await pngLinkPayload(args, "/plot_bar", origin, env) };
@@ -5813,9 +7284,16 @@ async function handleToolCall(name, args, env, origin) {
         const record = job && typeof job === "object" ? job : {};
         const kind = String(record.kind || "plot");
         const path = kind === "plot_multi" ? "/plot_multi" : kind === "plot_series" ? "/plot_series" : kind === "plot_bar" ? "/plot_bar" : "/plot";
-        return { kind, ...await pngLinkPayload(record, path, origin, env) };
+        const data = await pngLinkPayload(record, path, origin, env);
+        return { ...data, job_kind: kind };
       }));
       return { ok: true, status: 200, data: { count: results.length, results } };
+    }
+    case "teaching_template_link": {
+      return { ok: true, status: 200, data: await buildTeachingTemplate(args, env, origin) };
+    }
+    case "teaching_sequence_link": {
+      return { ok: true, status: 200, data: await buildTeachingSequence(args, env, origin) };
     }
     default:
       throw new Error(`unknown_tool:${name}`);
@@ -5878,9 +7356,32 @@ var index_default = {
         const packed = url.searchParams.get("d") || "";
         if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
         const payload = await parseCompressedBase64UrlJson(packed);
+        if (payload && payload.__svg_preview && payload.svg) {
+          return new Response(payload.svg, { status: 200, headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" } });
+        }
         return new Response(renderCircuitDiagramSvg(sanitizeCircuitPayloadFromArgs(payload)), { status: 200, headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" } });
       } catch (error) {
         return Response.json({ ok: false, error: "bad_circuit_query", message: String(error?.message || error) }, { status: 400, headers: corsHeaders() });
+      }
+    }
+    if (req.method === "GET" && url.pathname === "/venn.svg") {
+      try {
+        const packed = url.searchParams.get("d") || "";
+        if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
+        const payload = await parseCompressedBase64UrlJson(packed);
+        return new Response(renderVennDiagramSvg(payload), { status: 200, headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" } });
+      } catch (error) {
+        return Response.json({ ok: false, error: "bad_venn_query", message: String(error?.message || error) }, { status: 400, headers: corsHeaders() });
+      }
+    }
+    if (req.method === "GET" && url.pathname === "/c-memory.svg") {
+      try {
+        const packed = url.searchParams.get("d") || "";
+        if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
+        const payload = await parseCompressedBase64UrlJson(packed);
+        return new Response(renderCMemoryDiagramSvg(payload), { status: 200, headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" } });
+      } catch (error) {
+        return Response.json({ ok: false, error: "bad_c_memory_query", message: String(error?.message || error) }, { status: 400, headers: corsHeaders() });
       }
     }
     if (req.method === "GET" && url.pathname === "/shape3d.html") {
