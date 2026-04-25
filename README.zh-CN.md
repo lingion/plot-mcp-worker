@@ -2,11 +2,9 @@
 
 一个部署在 Cloudflare Worker 上的 MCP（Model Context Protocol）服务器，提供数学函数绘图、物理力学分析图、电路原理图、3D 几何体可视化和柱状图生成。所有图形在边缘端渲染，返回 PNG、SVG 或交互式 HTML。
 
-**在线地址：** `https://plot-mcp.qdp.qzz.io/mcp`
-
 ## 功能
 
-Plot MCP 将自然语言请求转为可发表的图像。AI 调用下方工具，Worker 在边缘完成计算并返回渲染结果。
+Plot MCP 将自然语言请求转为可发表的图像。AI 调用下方工具，Worker 在边缘端完成所有渲染（无外部 API 依赖），返回渲染结果。
 
 - **数学绘图** — 单函数、多函数叠加、自定义 (x,y) 数据点、柱状图
 - **物理力学图** — 自由体/受力分析 SVG，含分力、合力、角度、斜面
@@ -80,7 +78,7 @@ curl http://127.0.0.1:8790/healthz
 npx wrangler deploy
 ```
 
-路由：`plot-mcp.qdp.qzz.io/*`，上游渲染 API：`https://lingion.pythonanywhere.com`
+路由：`plot-mcp.qdp.qzz.io/*`。所有渲染在 Worker 内完成，无外部依赖。
 
 ## 项目结构
 
