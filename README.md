@@ -32,6 +32,15 @@ Chinese font rendering (PingFang SC) is built into the Worker bundle.
 | `plot_bar_json` | PNG base64 payload | Render a bar chart |
 | `plot_multi_images` | Multiple images | Batch-generate several plots in one call |
 
+<p align="center">
+  <img src="docs/examples/plot.png" width="45%" alt="Single expression plot">
+  <img src="docs/examples/plot_multi.png" width="45%" alt="Multi-expression plot">
+</p>
+<p align="center">
+  <img src="docs/examples/plot_series.png" width="45%" alt="Custom series plot">
+  <img src="docs/examples/plot_bar.png" width="45%" alt="Bar chart">
+</p>
+
 ### Physics Force Diagrams
 
 | Tool | Returns | Description |
@@ -40,12 +49,21 @@ Chinese font rendering (PingFang SC) is built into the Worker bundle.
 | `force_analysis_link` | SVG link | Full analysis with axes, components, resultant, incline |
 | `force_analysis_template_link` | SVG link | Pre-built templates: incline, hanging, horizontal, pulley, spring, double_block, pulley_group, spring_oscillator |
 
+<p align="center">
+  <img src="docs/examples/force_analysis.png" width="45%" alt="Force analysis diagram">
+  <img src="docs/examples/force_template.png" width="45%" alt="Force template (incline)">
+</p>
+
 ### Circuit Diagrams
 
 | Tool | Returns | Description |
 |------|---------|-------------|
 | `circuit_diagram_link` | SVG link | Custom circuit with components, wires, stages, branches |
 | `circuit_template_link` | SVG link | Pre-built: series, parallel, switch_lamp, source_resistor, led_resistor, meter_loop, transistor_switch, relay_driver, buzzer_loop, opamp_follower |
+
+<p align="center">
+  <img src="docs/examples/circuit.png" width="45%" alt="Circuit schematic (series)">
+</p>
 
 ### 3D Shapes
 
