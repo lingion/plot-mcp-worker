@@ -8,8 +8,8 @@ Plot MCP turns natural language requests into publication-quality images. An AI 
 
 - **Math plots** — single expression, multi-expression overlays, custom (x,y) series, bar charts
 - **Physics diagrams** — free-body / force analysis SVGs with components, resultants, angles, inclines
-- **Circuit schematics** — batteries, resistors, lamps, switches, meters, transistors, op-amps
-- **3D shapes** — interactive Plotly viewers for spheres, cubes, cones, tori, cylinders, pyramids
+- **Circuit schematics** — batteries, resistors, lamps, switches, meters, transistors, op-amps. Grid-based coordinate system with automatic spacing.
+- **3D shapes** — interactive Plotly viewers for spheres, cubes, cones, tori, cylinders, pyramids, and mathematical surface plots with static SVG previews
 - **Template shortcuts** — common mechanics setups (incline, hanging mass, pulley) and circuit topologies (series, parallel, LED+resistor)
 
 Chinese font rendering (PingFang SC) is built into the Worker bundle.
@@ -69,7 +69,11 @@ Chinese font rendering (PingFang SC) is built into the Worker bundle.
 
 | Tool | Returns | Description |
 |------|---------|-------------|
-| `shape3d_link` | Interactive HTML | 3D viewer for geometric shapes |
+| `shape3d_link` | SVG preview + interactive HTML | 3D surface rendering. Returns a static SVG contour preview (`svg_url`) for MCP clients, plus an interactive Plotly viewer (`html_url`). Supports multi-surface overlays, custom color scales, and contour lines. |
+
+<p align="center">
+  <img src="docs/examples/shape3d_preview.svg" width="60%" alt="3D surface preview">
+</p>
 
 ### Utility
 
