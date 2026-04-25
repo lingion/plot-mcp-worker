@@ -50,8 +50,8 @@ Chinese font rendering (PingFang SC) is built into the Worker bundle.
 | `force_analysis_template_link` | SVG link | Pre-built templates: incline, hanging, horizontal, pulley, spring, double_block, pulley_group, spring_oscillator |
 
 <p align="center">
-  <img src="docs/examples/force_analysis.png" width="45%" alt="Force analysis diagram">
-  <img src="docs/examples/force_template.png" width="45%" alt="Force template (incline)">
+  <img src="docs/examples/force_analysis.svg" width="45%" alt="Force analysis diagram">
+  <img src="docs/examples/force_template.svg" width="45%" alt="Force template (incline)">
 </p>
 
 ### Circuit Diagrams
@@ -62,7 +62,7 @@ Chinese font rendering (PingFang SC) is built into the Worker bundle.
 | `circuit_template_link` | SVG link | Pre-built: series, parallel, switch_lamp, source_resistor, led_resistor, meter_loop, transistor_switch, relay_driver, buzzer_loop, opamp_follower |
 
 <p align="center">
-  <img src="docs/examples/circuit.png" width="45%" alt="Circuit schematic (series)">
+  <img src="docs/examples/circuit.svg" width="45%" alt="Circuit schematic (series)">
 </p>
 
 ### 3D Shapes
