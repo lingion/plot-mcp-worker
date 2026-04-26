@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-04-22"
 workers_dev = true
 
+[[routes]]
+pattern = "plot-mcp.qdp.qzz.io/*"
+zone_name = "qdp.qzz.io"
+
 [[kv_namespaces]]
 binding = "SHORT_LINKS"
 id = "6849ed23150a499fb64581e266c4f74f"
