@@ -12,7 +12,7 @@ Plot MCP turns natural language requests into publication-quality images. An AI 
 - **3D shapes** — interactive Plotly viewers for spheres, cubes, cones, tori, cylinders, pyramids, and mathematical surface plots with static SVG previews
 - **Template shortcuts** — common mechanics setups (incline, hanging mass, pulley) and circuit topologies (series, parallel, LED+resistor)
 
-Chinese font rendering (PingFang SC) is built into the Worker bundle.
+Chinese font rendering uses the bundled PingFang SC subset font to keep the Worker self-contained without shipping the full system font files.
 
 ## MCP Tools
 
