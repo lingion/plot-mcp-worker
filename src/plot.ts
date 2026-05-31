@@ -99,14 +99,17 @@ export function applySeriesTransformsWithTrace(
 
   for (const t of s.transforms) {
     const before = s.points.length;
+    const warnBefore = _warnings.length;
     s = applyOneTransform(s, t, _warnings);
     const after = s.points.length;
+    const skipped = _warnings.length > warnBefore; // transform emitted a warning → it was skipped/partial
     stages.push({
       name: transformStageName(t),
       method: t.method ?? t.window ? String(t.window ?? "") : undefined,
       input: before,
       output: after,
       detail: buildStageDetail(t),
+      ...(skipped ? { skipped: true } : {}),
     });
   }
   // Merge internal string warnings into caller's warnings array
@@ -450,6 +453,7 @@ export interface TransformStage {
   input: number;        // input point count
   output: number;       // output point count
   detail?: Record<string, unknown>;  // method-specific params
+  skipped?: boolean;    // true when transform was skipped (warning emitted)
 }
 
 export interface TransformDebug {

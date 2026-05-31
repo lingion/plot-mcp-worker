@@ -155,19 +155,26 @@ function formulaText(text: string): string {
 function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
   if (points.length === 0) return "";
   const yRange = spec.yMax - spec.yMin || 1;
-  const DISCONTINUITY_THRESHOLD = yRange * 0.5; // if |Δy_data| > 50% of visible y-range, break
+  const JUMP_THRESHOLD = yRange * 0.5;
   const parts: string[] = [];
   let lastValidIdx = -1;
   for (let i = 0; i < points.length; i++) {
     const point = points[i];
     const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
     const yRaw = point.y;
-    // In log mode, skip non-positive points (log undefined)
     if (spec.yScale === "log" && yRaw <= 0) { lastValidIdx = -1; continue; }
     const y = mapY(yRaw, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     if (!Number.isFinite(x) || !Number.isFinite(y)) { lastValidIdx = -1; continue; }
-    // Discontinuity: large y jump in data space
-    if (lastValidIdx >= 0 && Math.abs(yRaw - points[lastValidIdx].y) > DISCONTINUITY_THRESHOLD) {
+    let discontinuity = false;
+    if (lastValidIdx >= 0) {
+      const prevY = points[lastValidIdx].y;
+      const dy = Math.abs(yRaw - prevY);
+      // Large absolute jump
+      if (dy > JUMP_THRESHOLD) discontinuity = true;
+      // Sign flip + large jump (catches asymptotes like tan, 1/x where Δy < threshold but behavior is discontinuous)
+      if (!discontinuity && dy > yRange * 0.2 && (yRaw * prevY < 0)) discontinuity = true;
+    }
+    if (discontinuity) {
       parts.push(`M${x.toFixed(2)},${y.toFixed(2)}`);
     } else {
       parts.push(`${lastValidIdx < 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`);
