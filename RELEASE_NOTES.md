@@ -1,3 +1,35 @@
+# v0.4.2 — Phase 3D: Data Transform Layer
+
+## Added
+- **`series[].transforms[]`**: chain data transforms per series, applied before layout/render
+- **`normalize`**: minmax / zscore / maxabs (target: x / y / both)
+- **`smooth`**: centered moving average (alias of rolling_average)
+- **`filter`**: keep points by `op` (>, >=, <, <=, ==, !=) and `value` on x or y
+- **`rolling_average`**: centered moving average, window ≥ 2, NaN-safe boundary fill
+- **`downsample`**: uniform or minmax bucketing to `maxPoints`
+- **`spec.warnings[]`**: non-fatal warnings returned (e.g. "smooth not supported for bar")
+
+## Rules
+- Transforms applied in user-specified order (no auto-reorder)
+- x/y alignment preserved across all transforms
+- Unsupported series types: transform skipped with warning (no silent fail)
+- `normalize` skipped if series has error bars (ambiguous after scaling)
+- Bounds recalculated after all transforms
+
+## Supported Matrix
+| Series type | normalize | smooth | filter | rolling_avg | downsample |
+|-------------|:---------:|:------:|:------:|:-----------:|:-----------:|
+| line        | ✅        | ✅     | ✅     | ✅          | ✅          |
+| scatter     | ✅        | ❌     | ✅     | ❌          | ✅          |
+| bar         | ✅        | ❌     | ✅     | ❌          | ❌          |
+| hist/box/pie| ❌        | ❌     | ❌     | ❌          | ❌          |
+
+## Quality
+- **24/24 smoke tests** (existing 18 + 6 new transform tests)
+- Visual verified: normalize minmax, smooth, filter, rolling_average, downsample
+
+---
+
 # v0.4.0 — Phase 3C: Subplot / Multi-plot Layout
 
 ## Added
