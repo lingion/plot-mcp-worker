@@ -1,3 +1,26 @@
+# v0.4.0 — Phase 3C: Subplot / Multi-plot Layout
+
+## Added
+- **`multi_plot` tool**: multi-panel subplot layout with rows × cols grid
+- **Independent cell rendering**: each subplot cell has its own `plotRect`, scale, and `clipPathId`
+- **Layout options**: `rows`, `cols`, `gap` (px between cells), `sharedX`, `sharedY`
+- **Per-cell spec**: each cell has its own `title`, `series`, `xlabel`, `ylabel`, `y_scale`
+- **`renderMultiPlotSvg()`**: composes all cells into a single SVG with global title + legend
+- **Global legend**: deduplicates series names across all cells, renders top-right
+- **sharedX / sharedY**: computes union domain across all cells for aligned axes
+
+## Architecture
+- New `MultiPlotCell` / `MultiPlotResult` types in `plot.ts`
+- New `buildSubplot()` normalizes multi-plot input into per-cell `PlotSpec`
+- New `renderSubplotCell()` renders one cell with its own clip path
+- Existing `renderPlotSvg()` unchanged — single-plot path is fully preserved
+
+## Quality
+- **15/15 smoke tests** (existing 14 + multi_plot)
+- Visual tests: 2x1 / 1x2 / 2x2 / sharedY / subplot+error bar
+
+---
+
 # v0.3.3 — Error bar refinement
 
 ## Added
