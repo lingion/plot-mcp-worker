@@ -1,9 +1,11 @@
 import { MAX_3D_LINE_POINTS, MAX_3D_LINES, MAX_3D_POINTS, MAX_3D_SURFACES, MAX_CIRCUIT_COMPONENTS, MAX_CIRCUIT_LAYOUT_BRANCHES, MAX_CIRCUIT_LAYOUT_ITEMS, MAX_CIRCUIT_WIRES, MAX_EXPR_LENGTH, MAX_FORCE_BODIES, MAX_FORCE_CONNECTORS, MAX_FORCE_ITEMS, MAX_FORCE_SURFACES, MAX_MULTI_IMAGE_JOBS, MAX_SURFACE_SAMPLES, Env, MAX_LABEL_LENGTH, MAX_SERIES, MAX_TITLE_LENGTH, SERVER_NAME, SERVER_VERSION, SHORT_LINK_PATH_PREFIX, SHORT_LINK_TOKEN_LENGTH, SHORT_LINK_TTL_SECONDS } from "./constants";
-import { buildBarChart, buildMultiPlot, buildSeriesPlot, buildSinglePlot, PlotSpec } from "./plot";
+import { analyzeData, buildBarChart, buildMultiPlot, buildSeriesPlot, buildSinglePlot, PlotSpec } from "./plot";
 import { corsHeaders, jsonRpc, jsonRpcError, toolResultPayload } from "./mcp";
 import { renderCircuitDiagramSvg, renderCMemoryDiagramSvg, renderForceAnalysisSvg, renderForceDiagramSvg, renderShape3DHtml, renderVennDiagramSvg, placeBodyOnSurface } from "./extras";
-import { renderPlotSvg, renderPngResponse } from "./render";
+import { renderPlotSvg, renderPngResponse, renderSpecToSvg } from "./render";
 import { clamp, ensureArray, limitText, parseCompressedBase64UrlJson, parseInteger, parseNumber, toCompressedBase64UrlFromJson } from "./utils";
+import { lookupCompat } from "./compat";
+import { route } from "./router";
 
 const pointSchema = {
   anyOf: [
@@ -29,15 +31,18 @@ const plotSeriesItemSchema = {
   type: "object",
   properties: {
     name: { type: "string" },
-    type: { type: "string", enum: ["line", "scatter", "line+scatter"] },
+    type: { type: "string", enum: ["line", "scatter", "line+scatter", "hist", "box", "pie"] },
     color: { type: "string" },
     points: {
       type: "array",
       items: pointSchema,
       minItems: 1,
     },
+    data: { type: "array", items: { type: "number" }, description: "Raw data array for hist/box" },
+    bins: { type: "integer", description: "Number of bins for histogram" },
+    labels: { type: "array", items: { type: "string" }, description: "Labels for pie chart" },
+    values: { type: "array", items: { type: "number" }, description: "Values for pie chart" },
   },
-  required: ["points"],
   additionalProperties: false,
 } as const;
 
@@ -562,6 +567,107 @@ const TOOLS = [
       type: "object",
       properties: teachingToolProperties,
       required: ["topic"],
+      additionalProperties: false,
+    },
+  },
+  // ── Canonical tools (Phase 1) ──
+  // Note: "plot" uses the legacy "plot" name above — canonical routing handles exprs/render via resolveCanonicalToLegacy
+  {
+    name: "plot_series",
+    description: "Plot custom point series (line/scatter). Use render.format to control output. Pass categories+values for bar charts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        series: { type: "array", items: plotSeriesItemSchema, minItems: 1 },
+        categories: { type: "array", items: { type: "string" } },
+        values: { type: "array", items: { type: "number" } },
+        series_name: { type: "string" },
+        title: { type: "string" },
+        xlabel: { type: "string" },
+        ylabel: { type: "string" },
+        grid: { type: "boolean", default: true },
+        annotations: { type: "array", items: plotAnnotationSchema },
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "diagram",
+    description: "Generate a diagram (force, circuit, venn, C memory). Pass diagram_type to select. Use render.format to control output.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        diagram_type: { type: "string", enum: ["force", "force_analysis", "circuit", "venn", "c_memory"] },
+        title: { type: "string" },
+        forces: { type: "array", items: forceItemSchema },
+        body_label: { type: "string" },
+        show_components: { type: "boolean" },
+        show_axes: { type: "boolean" },
+        show_resultant: { type: "boolean" },
+        show_angle_labels: { type: "boolean" },
+        incline_deg: { type: "number" },
+        components: { type: "array", items: circuitComponentSchema },
+        wires: { type: "array", items: circuitWireSchema },
+        stages: { type: "array", items: circuitStageSchema },
+        sets: { type: "array", items: vennSetSchema },
+        regions: vennRegionsSchema,
+        blocks: { type: "array", items: cMemoryBlockSchema },
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "geometry_3d",
+    description: "Generate an interactive 3D geometric shape viewer. Use render.format to control output.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...shape3dSchema.properties,
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "teaching",
+    description: "Generate a teaching-oriented STEM visualization or multi-figure sequence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...teachingToolProperties,
+        sequence: { type: "boolean", default: false, description: "If true, generate a multi-step sequence" },
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
+      required: ["topic"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "template",
+    description: "Generate a diagram from a common teaching template (force analysis, circuit).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        template_type: { type: "string", enum: ["force_analysis", "circuit"], description: "Which template family" },
+        template: { type: "string", description: "Specific template name (e.g. incline, parallel)" },
+        title: { type: "string" },
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "analysis",
+    description: "Statistical analysis and data summaries. (Phase 1: placeholder — not yet wired.)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["describe", "corr", "groupby"] },
+        data: { type: "array", items: { type: "number" } },
+        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
+      },
       additionalProperties: false,
     },
   },
@@ -2108,6 +2214,8 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     ylabel: limitText(args.ylabel, "y", MAX_LABEL_LENGTH),
     grid: args.grid ?? true,
     annotations: ensureArray<unknown>(args.annotations).slice(0, 24),
+    y_min: args.y_min,
+    y_max: args.y_max,
   };
 }
 
@@ -2223,7 +2331,7 @@ async function resolveShortLink(env: Env, token: string) {
 async function renderShortLink(record: ShortLinkRecord, env: Env) {
   if (record.path === "/png") {
     const spec = buildSpecFromPayload(record.payload);
-    return renderPngResponse(renderPlotSvg(spec), env);
+    return renderPngResponse(renderSpecToSvg(spec), env);
   }
   if (record.path === "/force.svg") {
     return new Response(renderForceDiagramSvg(record.payload), {
@@ -2932,7 +3040,7 @@ function buildSpecFromPayload(payload: Record<string, unknown>): PlotSpec {
   throw new Error("invalid plot path");
 }
 
-async function handleToolCall(name: string, args: Record<string, unknown>, env: Env, origin: string) {
+async function _legacyToolHandler(name: string, args: Record<string, unknown>, env: Env, origin: string) {
   switch (name) {
     case "health":
       return { ok: true, status: 200, data: { ok: true } };
@@ -3023,6 +3131,92 @@ async function handleToolCall(name: string, args: Record<string, unknown>, env: 
   }
 }
 
+/**
+ * Public entry point: tries compat mapping first, then routes to legacy handler.
+ */
+async function handleToolCall(name: string, args: Record<string, unknown>, env: Env, origin: string) {
+  // Handle analysis directly (no legacy equivalent)
+  if (name === "analysis") {
+    return { ok: true, status: 200, data: analyzeData(args) };
+  }
+
+  // Check if this is a canonical tool name that needs compat mapping
+  const mapping = lookupCompat(name);
+
+  // If it has a compat mapping (legacy name → canonical), resolve and delegate
+  if (mapping) {
+    const legacyName = resolveCanonicalToLegacy(name, args, mapping);
+    return _legacyToolHandler(legacyName, args, env, origin);
+  }
+
+  // Try resolving as a canonical name (diagram, geometry_3d, teaching, template, etc.)
+  const legacyName = resolveCanonicalToLegacy(name, args, null);
+  if (legacyName !== name) {
+    return _legacyToolHandler(legacyName, args, env, origin);
+  }
+
+  // Pure legacy name — pass through directly
+  return _legacyToolHandler(name, args, env, origin);
+}
+
+function resolveCanonicalToLegacy(
+  name: string,
+  args: Record<string, unknown>,
+  mapping: { tool?: string; render?: { format: string }; diagram_type?: string; template_type?: string; bar?: boolean } | null,
+): string {
+  // If mapping provides the routing, use it
+  const render = (args.render as Record<string, string>)?.format || mapping?.render?.format;
+  const canonical = mapping?.tool || name;
+
+  switch (canonical) {
+    case "plot": {
+      if (Array.isArray(args.exprs)) {
+        if (render === "link") return "plot_multi_png_link";
+        if (render === "json") return "plot_multi_json";
+        return "plot_multi";
+      }
+      if (render === "link") return "plot_png_link";
+      if (render === "json") return "plot_json";
+      return "plot_json";
+    }
+    case "plot_series": {
+      if (args.categories || mapping?.bar) return "plot_bar_json";
+      if (render === "link") return "plot_series_png_link";
+      if (render === "json") return "plot_series_json";
+      return "plot_series";
+    }
+    case "diagram": {
+      const dt = args.diagram_type || mapping?.diagram_type;
+      switch (dt) {
+        case "force": return "force_diagram_link";
+        case "force_analysis": return "force_analysis_link";
+        case "circuit": return "circuit_diagram_link";
+        case "venn": return "venn_diagram_link";
+        case "c_memory": return "c_memory_diagram_link";
+        default: return "force_diagram_link";
+      }
+    }
+    case "geometry_3d":
+      return "shape3d_link";
+    case "teaching": {
+      if (args.sequence) return "teaching_sequence_link";
+      return "teaching_template_link";
+    }
+    case "template": {
+      const tt = args.template_type || mapping?.template_type;
+      if (tt === "force_analysis") return "force_analysis_template_link";
+      if (tt === "circuit") return "circuit_template_link";
+      return "teaching_template_link";
+    }
+    case "analysis":
+      return "analysis";
+    case "health":
+      return "health";
+    default:
+      return name;
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -3040,7 +3234,7 @@ export default {
         if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
         const payload = await parseCompressedBase64UrlJson<Record<string, unknown>>(packed);
         const spec = buildSpecFromPayload(payload);
-        return new Response(renderPlotSvg(spec), {
+        return new Response(renderSpecToSvg(spec), {
           status: 200,
           headers: {
             "content-type": "image/svg+xml; charset=utf-8",
@@ -3059,7 +3253,7 @@ export default {
         if (!packed) return Response.json({ ok: false, error: "missing_d" }, { status: 400, headers: corsHeaders() });
         const payload = await parseCompressedBase64UrlJson<Record<string, unknown>>(packed);
         const spec = buildSpecFromPayload(payload);
-        return await renderPngResponse(renderPlotSvg(spec), env);
+        return await renderPngResponse(renderSpecToSvg(spec), env);
       } catch (error) {
         return Response.json({ ok: false, error: "bad_png_query", message: String((error as Error)?.message || error) }, { status: 400, headers: corsHeaders() });
       }
