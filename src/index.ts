@@ -3180,7 +3180,8 @@ function resolveCanonicalToLegacy(
       return "plot_json";
     }
     case "plot_series": {
-      if (args.categories || mapping?.bar) return "plot_bar_json";
+      // Only route to plot_bar_json if using legacy categories+values format (not multi-series bar)
+      if ((args.categories && args.values) || mapping?.bar) return "plot_bar_json";
       if (render === "link") return "plot_series_png_link";
       if (render === "json") return "plot_series_json";
       return "plot_series";

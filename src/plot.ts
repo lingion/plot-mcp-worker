@@ -3,7 +3,7 @@ import { DEFAULT_PALETTE, MAX_EXPR_LENGTH, MAX_LABEL_LENGTH, MAX_POINTS, MAX_SER
 import { clamp, ensureArray, limitText, parseInteger, parseNumber } from "./utils";
 
 export type PlotPoint = { x: number; y: number };
-export type PlotSeriesType = "line" | "scatter" | "line+scatter";
+export type PlotSeriesType = "line" | "scatter" | "line+scatter" | "bar";
 export type PlotAnnotation =
   | { kind: "vertical_line"; x: number; label: string; color: string }
   | { kind: "point"; x: number; y: number; label: string; color: string }
@@ -15,6 +15,9 @@ export interface NormalizedSeries {
   type: PlotSeriesType;
   color: string;
   points: PlotPoint[];
+  error?: number[];  // per-point error bars (±)
+  group?: string;    // group label for grouped/stacked bars
+  stack?: string;    // stack ID for stacked bars
 }
 
 export interface HistogramBin {
@@ -46,6 +49,8 @@ export interface PieSlice {
 
 export type PlotRenderMode = "xy" | "bar" | "hist" | "box" | "pie";
 
+export type BarMode = "grouped" | "stacked";
+
 export interface PlotSpec {
   title: string;
   xlabel: string;
@@ -58,6 +63,7 @@ export interface PlotSpec {
   yMax: number;
   categories?: string[];
   barMode?: boolean;
+  barStyle?: BarMode;  // "grouped" | "stacked" for multi-series bars
   mode?: PlotRenderMode;
   annotations?: PlotAnnotation[];
   histogram?: {
@@ -171,7 +177,7 @@ function normalizeAnnotations(rawAnnotations: unknown): PlotAnnotation[] {
   });
 }
 
-function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation[] = []) {
+function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation[] = [], barStyle?: BarMode): { xMin: number; xMax: number; yMin: number; yMax: number } {
   const all = series.flatMap((item) => item.points);
   const pointAnnotations = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "point" | "label" }> => item.kind === "point" || item.kind === "label");
   const verticalAnnotations = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "vertical_line" }> => item.kind === "vertical_line");
@@ -182,11 +188,54 @@ function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation
     ...verticalAnnotations.map((item) => item.x),
     ...areaAnnotations.flatMap((item) => [item.x_min, item.x_max]),
   ];
-  const ys = [...all.map((item) => item.y), ...pointAnnotations.map((item) => item.y)];
-  let xMin = Math.min(...xs);
-  let xMax = Math.max(...xs);
-  let yMin = Math.min(...ys);
-  let yMax = Math.max(...ys);
+  let ys: number[] = [];
+
+  // For stacked bars, compute cumulative heights
+  if (barStyle === "stacked" && series.length > 0) {
+    const numPoints = series[0].points.length;
+    for (let i = 0; i < numPoints; i++) {
+      let acc = 0;
+      for (const s of series) {
+        acc += s.points[i]?.y || 0;
+      }
+      ys.push(0); // baseline
+      ys.push(acc);
+    }
+  } else {
+    ys = [...all.map((item) => item.y), ...pointAnnotations.map((item) => item.y)];
+  }
+
+  // Extend for error bars
+  for (const s of series) {
+    if (s.error) {
+      for (let i = 0; i < Math.min(s.points.length, s.error.length); i++) {
+        const err = s.error[i];
+        if (Number.isFinite(err) && err > 0) {
+          ys.push(s.points[i].y - err);
+          ys.push(s.points[i].y + err);
+        }
+      }
+    }
+  }
+
+    let xMin = xs.length ? Math.min(...xs) : -1;
+  let xMax = xs.length ? Math.max(...xs) : 1;
+  let yMin = ys.length ? Math.min(...ys) : -1;
+  let yMax = ys.length ? Math.max(...ys) : 1;
+
+  // Bar-aware x-padding: bars have width, domain must extend beyond data center points
+  const barSeries = series.filter((s) => s.type === "bar");
+  if (barSeries.length > 0 && xs.length > 1) {
+    const numCategories = barSeries[0].points.length;
+    const xRange = xMax - xMin;
+    const slotWidth = xRange / Math.max(numCategories - 1, 1);
+    const halfGroup = barStyle === "stacked"
+      ? slotWidth * 0.32
+      : slotWidth * 0.40 * barSeries.length;
+    xMin -= halfGroup;
+    xMax += halfGroup;
+  }
+
   if (xMin === xMax) {
     xMin -= 1;
     xMax += 1;
@@ -586,16 +635,41 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     };
   }
 
+  const hasBar = input.some((item) => {
+    const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+    return record.type === "bar";
+  });
+
   const series = input.map((item, index) => {
     const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
-    const type = record.type === "scatter" || record.type === "line+scatter" ? record.type : "line";
-    return {
+    let type: PlotSeriesType;
+    if (record.type === "scatter") type = "scatter";
+    else if (record.type === "line+scatter") type = "line+scatter";
+    else if (record.type === "bar") type = "bar";
+    else type = "line";
+
+    const result: NormalizedSeries = {
       name: safeLabel(record.name, `Series ${index + 1}`),
       type,
       color: typeof record.color === "string" && record.color ? record.color : DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
       points: normalizePoints(Array.isArray(record.points) ? record.points as Array<[number, number]> : []),
-    } satisfies NormalizedSeries;
+    };
+
+    // Error bars
+    if (Array.isArray(record.error)) {
+      result.error = (record.error as unknown[]).map((v) => Number(v)).filter(Number.isFinite);
+    }
+
+    // Group / stack for bars
+    if (typeof record.group === "string") result.group = record.group;
+    if (typeof record.stack === "string") result.stack = record.stack;
+
+    return result;
   });
+
+  // Detect bar style
+  const barStyle = hasBar ? (args.bar_style === "stacked" ? "stacked" as BarMode : "grouped" as BarMode) : undefined;
+
   return {
     title: safeTitle(args.title, "Series Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -603,8 +677,9 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     grid: args.grid === undefined ? true : Boolean(args.grid),
     series,
     annotations,
-    mode: "xy",
-    ...calculateBounds(series, annotations),
+    mode: hasBar ? "bar" : "xy",
+    barStyle,
+    ...calculateBounds(series, annotations, barStyle),
   };
 }
 

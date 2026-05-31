@@ -124,20 +124,86 @@ function renderLegend(spec: PlotSpec, width: number): string {
 }
 
 function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
-  if (!spec.barMode) return "";
-  const count = spec.series[0]?.points.length || 0;
-  if (!count) return "";
-  const slotWidth = plotWidth / count;
-  const barWidth = Math.max(12, slotWidth * 0.64);
+  if (!spec.barMode && spec.mode !== "bar") return "";
+
   const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
-  return spec.series[0].points.map((point, index) => {
-    const centerX = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
-    const top = Math.min(y, zeroY);
-    const height = Math.max(1, Math.abs(zeroY - y));
-    const label = formulaText(spec.categories?.[index] || String(index + 1));
-    return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${spec.series[0].color}" opacity="0.88" rx="6"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text></g>`;
-  }).join("");
+
+  // Multi-series bar: grouped or stacked
+  const barSeries = spec.series.filter((s) => s.type === "bar" || spec.mode === "bar");
+  if (barSeries.length === 0) return "";
+
+  // Single series bar (original behavior)
+  if (barSeries.length === 1 && !spec.barStyle) {
+    const count = barSeries[0].points.length;
+    if (!count) return "";
+    const slotWidth = plotWidth / count;
+    const barWidth = Math.max(12, slotWidth * 0.64);
+    return barSeries[0].points.map((point, index) => {
+      const centerX = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+      const top = Math.min(y, zeroY);
+      const height = Math.max(1, Math.abs(zeroY - y));
+      const label = formulaText(spec.categories?.[index] || String(index + 1));
+      return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${barSeries[0].color}" rx="6"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text></g>`;
+    }).join("");
+  }
+
+  // Multi-series: grouped or stacked — band-scale layout
+  const numCategories = barSeries[0].points.length;
+  const numSeries = barSeries.length;
+  const bandWidth = plotWidth / numCategories; // total width per category slot
+  const innerPadRatio = 0.25; // 25% of band is gap between categories
+  const groupWidth = bandWidth * (1 - innerPadRatio);
+
+  if (spec.barStyle === "stacked") {
+    // Stacked bars: single bar per category, layers on top
+    const barWidth = Math.max(12, groupWidth);
+    const parts: string[] = [];
+
+    for (let catIdx = 0; catIdx < numCategories; catIdx++) {
+      const bandStart = plotX + catIdx * bandWidth;
+      const centerX = bandStart + bandWidth / 2;
+      let cumulativeY = 0;
+      const label = formulaText(spec.categories?.[catIdx] || String(catIdx + 1));
+
+      for (let sIdx = 0; sIdx < numSeries; sIdx++) {
+        const val = barSeries[sIdx].points[catIdx]?.y || 0;
+        const yBot = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight);
+        cumulativeY += val;
+        const yTop = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight);
+        const top = Math.min(yBot, yTop);
+        const h = Math.max(1, Math.abs(yBot - yTop));
+        const rx = sIdx === numSeries - 1 ? 6 : 0;
+        parts.push(`<rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${barSeries[sIdx].color}" rx="${rx}"/>`);
+      }
+      parts.push(`<text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text>`);
+    }
+    return parts.join("");
+  }
+
+  // Grouped bars: multiple bars per category with intra-group gap
+  const intraGap = 2;
+  const barWidth = Math.max(8, (groupWidth - intraGap * (numSeries - 1)) / numSeries);
+  const parts: string[] = [];
+
+  for (let catIdx = 0; catIdx < numCategories; catIdx++) {
+    const bandStart = plotX + catIdx * bandWidth;
+    const centerX = bandStart + bandWidth / 2;
+    const totalBarsWidth = barWidth * numSeries + intraGap * (numSeries - 1);
+    const groupStart = centerX - totalBarsWidth / 2;
+    const label = formulaText(spec.categories?.[catIdx] || String(catIdx + 1));
+
+    for (let sIdx = 0; sIdx < numSeries; sIdx++) {
+      const val = barSeries[sIdx].points[catIdx]?.y || 0;
+      const y = mapY(val, spec.yMin, spec.yMax, plotY, plotHeight);
+      const top = Math.min(y, zeroY);
+      const h = Math.max(1, Math.abs(zeroY - y));
+      const x = groupStart + sIdx * (barWidth + intraGap);
+      parts.push(`<rect x="${x.toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${barSeries[sIdx].color}" rx="4"/>`);
+    }
+    parts.push(`<text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text>`);
+  }
+  return parts.join("");
 }
 
 function firstSeriesAreaPath(spec: PlotSpec, xMin: number, xMax: number, plotX: number, plotY: number, plotWidth: number, plotHeight: number) {
@@ -204,7 +270,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
     })
   ].join("") : "";
 
-  const tickLabels = spec.barMode ? [
+  const tickLabels = (spec.barMode || spec.mode === "bar") ? [
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
       return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(2)}</text>`;
@@ -220,7 +286,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
     })
   ].join("");
 
-  const seriesSvg = spec.barMode ? "" : spec.series.map((series) => {
+  const seriesSvg = (spec.barMode || spec.mode === "bar") ? "" : spec.series.map((series) => {
     const path = makePath(series.points, spec, plotX, plotY, plotWidth, plotHeight);
     const circles = series.type === "line" ? "" : series.points.map((point) => {
       const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
@@ -228,7 +294,42 @@ export function renderPlotSvg(spec: PlotSpec): string {
       return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
     }).join("");
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-    return `<g>${line}${circles}</g>`;
+
+    // Error bars
+    let errorSvg = "";
+    if (series.error && series.error.length > 0) {
+      errorSvg = series.points.slice(0, series.error.length).map((point, i) => {
+        const err = series.error![i];
+        if (!Number.isFinite(err) || err <= 0) return "";
+        const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+        const cyTop = mapY(point.y + err, spec.yMin, spec.yMax, plotY, plotHeight);
+        const cyBot = mapY(point.y - err, spec.yMin, spec.yMax, plotY, plotHeight);
+        const capW = 6;
+        return `<g>
+          <line x1="${cx}" y1="${cyTop}" x2="${cx}" y2="${cyBot}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
+          <line x1="${cx - capW}" y1="${cyTop}" x2="${cx + capW}" y2="${cyTop}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
+          <line x1="${cx - capW}" y1="${cyBot}" x2="${cx + capW}" y2="${cyBot}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
+        </g>`;
+      }).join("");
+    }
+
+    // Bar series overlay (when mixed with line/scatter)
+    let barOverlay = "";
+    if (series.type === "bar") {
+      const count = series.points.length;
+      const slotWidth = plotWidth / Math.max(count, 1);
+      const barWidth = Math.max(12, slotWidth * 0.64);
+      const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+      barOverlay = series.points.map((point) => {
+        const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+        const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+        const top = Math.min(y, zeroY);
+        const h = Math.max(1, Math.abs(zeroY - y));
+        return `<rect x="${(cx - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${series.color}" opacity="0.7" rx="4"/>`;
+      }).join("");
+    }
+
+    return `<g>${barOverlay}${line}${circles}${errorSvg}</g>`;
   }).join("");
 
   const barLayer = renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight);
@@ -241,14 +342,17 @@ export function renderPlotSvg(spec: PlotSpec): string {
   </style>
   <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
+  <defs><clipPath id="plot-clip"><rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}"/></clipPath></defs>
   <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   ${tickLabels}
+  <g clip-path="url(#plot-clip)">
   ${barLayer}
   ${annotationLayer}
   ${seriesSvg}
+  </g>
   ${renderLegend(spec, width)}
   <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${formulaText(spec.xlabel)}</text>
   <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
