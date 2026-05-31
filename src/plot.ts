@@ -81,6 +81,58 @@ export function applySeriesTransforms(
   return s;
 }
 
+export function applySeriesTransformsWithTrace(
+  series: NormalizedSeries,
+  warnings: string[]
+): { series: NormalizedSeries; stages: TransformStage[] } {
+  const stages: TransformStage[] = [];
+  let s = series;
+  const inputCount = s.points.length;
+  stages.push({ name: "raw", inputCount, outputCount: inputCount });
+  if (!s.transforms || s.transforms.length === 0) return { series: s, stages };
+
+  for (const t of s.transforms) {
+    const before = s.points.length;
+    s = applyOneTransform(s, t, warnings);
+    const after = s.points.length;
+    stages.push({
+      name: transformStageName(t),
+      inputCount: before,
+      outputCount: after,
+    });
+  }
+  return { series: s, stages };
+}
+
+function transformStageName(t: TransformSpec): string {
+  switch (t.type) {
+    case "normalize": return `normalize(${t.method ?? "minmax"}${t.target ? "," + t.target : ""})`;
+    case "smooth":    return `smooth(window=${t.window ?? 3})`;
+    case "filter":    return `filter(${t.target ?? "y"}${t.op}${t.value})`;
+    case "rolling_average": return `rolling(window=${t.window ?? 3})`;
+    case "downsample": return `downsample(${t.method ?? "uniform"},max=${t.maxPoints})`;
+    default: return "unknown";
+  }
+}
+
+function collectSeriesTransforms(
+  series: NormalizedSeries[],
+  warnings: string[],
+  trace: boolean
+): { transformedSeries: NormalizedSeries[]; allStages: TransformStage[] } {
+  if (!trace) {
+    return { transformedSeries: series.map(s => applySeriesTransforms(s, warnings)), allStages: [] };
+  }
+  const transformedSeries: NormalizedSeries[] = [];
+  const allStages: TransformStage[] = [];
+  for (const s of series) {
+    const { series: ts, stages } = applySeriesTransformsWithTrace(s, warnings);
+    transformedSeries.push(ts);
+    if (stages.length > 1) allStages.push(...stages);
+  }
+  return { transformedSeries, allStages };
+}
+
 function applyOneTransform(
   s: NormalizedSeries,
   t: TransformSpec,
@@ -354,6 +406,16 @@ export interface TransformWarnings {
   warnings: string[];
 }
 
+export interface TransformStage {
+  name: string;
+  inputCount: number;
+  outputCount: number;
+}
+
+export interface TransformDebug {
+  stages: TransformStage[];
+}
+
 export interface BoxPlotGroup {
   name: string;
   color: string;
@@ -410,6 +472,7 @@ export interface PlotSpec {
     total: number;
   };
   warnings?: string[];  // non-fatal warnings from transforms or rendering
+  debug?: TransformDebug;  // transform pipeline trace (only when debug:true in request)
 }
 
 export interface DescribeStats {
@@ -1044,8 +1107,9 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
 
   // Apply transforms to each series and collect warnings
   const warnings: string[] = [];
-  const transformedSeries = series.map(s => applySeriesTransforms(s, warnings));
-  const transformedSpec = {
+  const debug = (args.debug === true);
+  const { transformedSeries, allStages } = collectSeriesTransforms(series, warnings, debug);
+  const transformedSpec: PlotSpec = {
     title: safeTitle(args.title, "Series Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
     ylabel: safeLabel(args.ylabel, "y"),
@@ -1057,6 +1121,7 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     yScale,
     ...calculateBounds(transformedSeries, annotations, barStyle, yScale),
     warnings: warnings.length > 0 ? warnings : undefined,
+    debug: debug && allStages.length > 0 ? { stages: allStages } : undefined,
   };
   return transformedSpec;
 }

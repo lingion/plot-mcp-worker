@@ -2252,6 +2252,7 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     y_scale: args.y_scale,
     bar_style: args.bar_style,
     categories: args.categories,
+    debug: args.debug,
   };
 }
 
@@ -2349,8 +2350,18 @@ async function buildHtmlLinkData(env: Env, path: string, payload: Record<string,
 
 async function pngLinkPayload(args: Record<string, unknown>, path: string, origin: string, env: Env) {
   const payload = normalizePayload(args, path);
-  buildSpecFromPayload(payload);
-  return buildPlotLinkData(payload, origin, env);
+  const spec = buildSpecFromPayload(payload);
+  const base = await buildPlotLinkData(payload, origin, env);
+  // Collect all warnings: payload-level + transform-level from spec
+  const transformWarnings: string[] = (spec as any).warnings ?? [];
+  const payloadWarnings = collectPayloadWarnings(payload);
+  const allWarnings = [...payloadWarnings, ...transformWarnings];
+  // Attach transform debug trace if available (only when debug:true in args)
+  const dbg = (spec as any)?.debug;
+  if (args.debug === true && dbg && Array.isArray(dbg.stages) && dbg.stages.length > 0) {
+    return { ...base, warnings: allWarnings.length > 0 ? allWarnings : undefined, debug: dbg };
+  }
+  return { ...base, warnings: allWarnings.length > 0 ? allWarnings : undefined };
 }
 
 async function resolveShortLink(env: Env, token: string) {
