@@ -87,6 +87,50 @@ function formatTick(v: number, scale?: string): string {
   return v.toFixed(2);
 }
 
+/** Generate nice tick positions at π fractions within [xMin, xMax] */
+function generatePiTicks(xMin: number, xMax: number, maxTicks: number): number[] {
+  const pi = Math.PI;
+  const range = xMax - xMin;
+  // Try common denominators: 1,2,3,4,6
+  // Pick the one that gives closest to maxTicks ticks
+  const stepOptions = [pi, pi / 2, pi / 3, pi / 4, pi / 6];
+  let bestStep = pi / 2;
+  let bestDiff = Infinity;
+  for (const step of stepOptions) {
+    const count = Math.floor(range / step) + 1;
+    const diff = Math.abs(count - maxTicks);
+    if (diff < bestDiff) { bestStep = step; bestDiff = diff; }
+  }
+  // Snap start to nearest step multiple
+  const start = Math.ceil(xMin / bestStep) * bestStep;
+  const ticks: number[] = [];
+  for (let v = start; v <= xMax + bestStep * 0.01; v += bestStep) {
+    ticks.push(Math.round(v / bestStep) * bestStep); // snap to avoid float drift
+  }
+  return ticks;
+}
+
+/** Format a tick value as a π fraction (e.g. "π/2", "3π/4", "-π") */
+function formatPiTick(v: number): string {
+  if (Math.abs(v) < 0.01) return "0";
+  const r = v / Math.PI;
+  const denominators = [1, 2, 3, 4, 6, 8];
+  let bestNum = 0, bestDen = 1, bestErr = Infinity;
+  for (const d of denominators) {
+    const n = Math.round(r * d);
+    const err = Math.abs(r - n / d);
+    if (err < bestErr) { bestNum = n; bestDen = d; bestErr = err; }
+  }
+  if (bestErr > 0.05) return v.toFixed(2); // fallback for non-π values
+  const sign = bestNum < 0 ? "-" : "";
+  const absNum = Math.abs(bestNum);
+  if (bestDen === 1) {
+    return absNum === 1 ? `${sign}π` : `${sign}${absNum}π`;
+  }
+  if (absNum === 1) return `${sign}π/${bestDen}`;
+  return `${sign}${absNum}π/${bestDen}`;
+}
+
 function logTickSvg(v: number, x: number, y: number, anchor: string): string {
   const p = Math.log10(Math.abs(v));
   if (Math.abs(p - Math.round(p)) < 0.01) {
@@ -354,7 +398,13 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const plotWidth = width - 230;
   const plotHeight = height - 220;
   const gridLines = 5;
-  const xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+  // Pi-aware tick generation
+  let xTicks: number[];
+  if (spec.xMode === "pi") {
+    xTicks = generatePiTicks(spec.xMin, spec.xMax, gridLines);
+  } else {
+    xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+  }
   // Generate y-axis ticks — linear or log scale
   let yTicks: number[];
   if (spec.yScale === "log" && spec.yMin > 0 && spec.yMax > 0) {
@@ -385,7 +435,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
   ].join("") : [
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="13" text-anchor="middle" fill="#6b7280">${formatTick(tick, spec.yScale)}</text>`;
+      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="13" text-anchor="middle" fill="#6b7280">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
     }),
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
@@ -625,7 +675,7 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
     }),
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<text x="${x.toFixed(2)}" y="${(plotY + plotHeight + 18).toFixed(2)}" font-size="13" text-anchor="middle" fill="#374151">${formatTick(tick, spec.xScale)}</text>`;
+      return `<text x="${x.toFixed(2)}" y="${(plotY + plotHeight + 18).toFixed(2)}" font-size="13" text-anchor="middle" fill="#374151">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
     })
   ].join("");
 
@@ -781,7 +831,13 @@ export function renderSpecToSvg(spec: PlotSpec): string {
   }
 
   if (mode === "hist") {
-    const xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+    // Pi-aware tick generation
+  let xTicks: number[];
+  if (spec.xMode === "pi") {
+    xTicks = generatePiTicks(spec.xMin, spec.xMax, gridLines);
+  } else {
+    xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+  }
     const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
     const grid = spec.grid ? [
       ...yTicks.map((tick) => {
