@@ -664,42 +664,77 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
 
 export function renderMultiPlotSvg(result: MultiPlotResult): string {
   const { rows, cols, gap, title, cells, outerWidth, outerHeight } = result;
-  const cellSvgs = cells.map((cell, i) => renderSubplotCell(cell, i)).join("");
-  const legend = renderLegendForMulti(cells);
+  const MARGIN = 60;
+  const LEGEND_GAP = 16;
+
+  // Collect + dedupe legend items
+  const seen = new Set<string>();
+  const entries: { name: string; color: string }[] = [];
+  for (const cell of cells) {
+    for (const s of cell.spec.series) {
+      if (!seen.has(s.name)) { seen.add(s.name); entries.push({ name: s.name, color: s.color }); }
+    }
+  }
+
+  // Measure legend
+  const ITEM_H = 22, MARKER = 16, GAP = 8, PAD_X = 12, PAD_Y = 10;
+  const maxLabelLen = entries.reduce((m, e) => Math.max(m, e.name.length), 0);
+  const labelW = maxLabelLen * 13 * 0.6;
+  const legendW = PAD_X * 2 + MARKER + GAP + labelW;
+  const legendH = PAD_Y * 2 + entries.length * ITEM_H;
+
+  // Legend position: right if grid is wide enough, else bottom
+  const minGridW = 420;
+  const availW = outerWidth - 2 * MARGIN;
+  const useRight = entries.length > 0 && availW - legendW - LEGEND_GAP >= minGridW;
+  const useBottom = entries.length > 0 && !useRight;
+
+  // Grid rect (legend reserves space)
+  const gridW = useRight ? availW - legendW - LEGEND_GAP : availW;
+  const gridH = useBottom ? outerHeight - 2 * MARGIN - legendH - LEGEND_GAP : outerHeight - 2 * MARGIN;
+  const cellW = Math.floor((gridW - (cols - 1) * gap) / cols);
+  const cellH = Math.floor((gridH - (rows - 1) * gap) / rows);
+
+  // Legend rect
+  const legendRect = useRight
+    ? { x: MARGIN + gridW + LEGEND_GAP, y: MARGIN, w: legendW, h: legendH }
+    : { x: MARGIN, y: MARGIN + gridH + LEGEND_GAP, w: gridW, h: legendH };
+
+  // Render cells in grid rect
+  const cellSvgs = cells.map((cell, idx) => {
+    const cx = MARGIN + cell.col * (cellW + gap);
+    const cy = MARGIN + cell.row * (cellH + gap);
+    const adjusted: MultiPlotCell = { ...cell, x: cx, y: cy, width: cellW, height: cellH };
+    return renderSubplotCell(adjusted, idx);
+  }).join("");
+
+  // Render legend in reserved space
+  const legendSvg = (useRight || useBottom)
+    ? renderLegendInRect(entries, legendRect, useRight ? "right" : "bottom")
+    : "";
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${outerWidth}" height="${outerHeight}" viewBox="0 0 ${outerWidth} ${outerHeight}">
   <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
   <rect width="100%" height="100%" fill="${DEFAULT_BG}"/>
   <text x="${outerWidth / 2}" y="36" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${formulaText(title)}</text>
   ${cellSvgs}
-  ${legend}
+  ${legendSvg}
 </svg>`;
 }
 
-function renderLegendForMulti(cells: MultiPlotCell[]): string {
-  // Collect unique series across all cells
-  const seen = new Set<string>();
-  const entries: { name: string; color: string }[] = [];
-  for (const cell of cells) {
-    for (const s of cell.spec.series) {
-      if (!seen.has(s.name)) {
-        seen.add(s.name);
-        entries.push({ name: s.name, color: s.color });
-      }
-    }
-  }
+function renderLegendInRect(
+  entries: { name: string; color: string }[],
+  rect: { x: number; y: number; w: number; h: number },
+  position: "right" | "bottom"
+): string {
   if (!entries.length) return "";
-  const ITEMS = entries.length;
-  const outerWidth = 800;
-  const ITEM_H = 20;
-  const legendH = ITEMS * ITEM_H + 16;
-  const lx = outerWidth - 140;
-  const ly = 60;
+  const ITEM_H = 22, MARKER = 16, GAP = 8, PAD_X = 12, PAD_Y = 10;
   const parts = entries.map(({ name, color }, i) => {
-    const lyi = ly + 8 + i * ITEM_H;
-    return `<rect x="${lx}" y="${lyi}" width="14" height="14" fill="${color}" rx="3"/><text x="${lx + 20}" y="${lyi + 12}" font-size="13" fill="#374151">${formulaText(name)}</text>`;
+    const lyi = rect.y + PAD_Y + i * ITEM_H;
+    return `<rect x="${rect.x + PAD_X}" y="${lyi}" width="${MARKER}" height="${MARKER}" fill="${color}" rx="3"/><text x="${rect.x + PAD_X + MARKER + GAP}" y="${lyi + 13}" font-size="13" fill="#374151">${formulaText(name)}</text>`;
   }).join("");
-  return `<g><rect x="${lx - 8}" y="${ly - 8}" width="130" height="${legendH}" fill="#ffffff" stroke="#e5e7eb" stroke-width="1" rx="4"/>${parts}</g>`;
+  return `<g><rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" fill="#ffffff" stroke="#e5e7eb" stroke-width="1" rx="4"/>${parts}</g>`;
 }
 
 export function renderSpecToSvg(spec: PlotSpec): string {

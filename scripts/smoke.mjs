@@ -158,5 +158,51 @@ console.log("Running regression tests...\n");
   assert(data && data.svg_url, "multi_plot: returns SVG URL");
 }
 
+// 16. multi_plot 1x2 mixed (right legend)
+{
+  const d = await callTool("multi_plot", {
+    rows: 1, cols: 2, title: "1x2 Legend Fix",
+    plots: [
+      { row: 0, col: 0, title: "Line", series: [{ type: "line", name: "y=x^2", points: [[0, 0], [1, 1], [2, 4]] }] },
+      { row: 0, col: 1, title: "Bar", series: [{ type: "bar", name: "Rev", points: [[0, 10], [1, 15], [2, 12]] }] },
+    ]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "multi_plot 1x2: returns PNG link");
+}
+
+// 17. multi_plot 2x2 (right legend no overlap)
+{
+  const d = await callTool("multi_plot", {
+    rows: 2, cols: 2, title: "2x2 Legend No Overlap",
+    plots: [
+      { row: 0, col: 0, title: "Line", series: [{ type: "line", name: "line", points: [[0, 1], [1, 2], [2, 3]] }] },
+      { row: 0, col: 1, title: "Scatter", series: [{ type: "scatter", name: "scatter", points: [[0, 3], [1, 1], [2, 4]] }] },
+      { row: 1, col: 0, title: "Bar", series: [{ type: "bar", name: "bar", points: [[0, 10], [1, 15], [2, 12]] }] },
+      { row: 1, col: 1, title: "L+S", series: [{ type: "line+scatter", name: "l+s", points: [[0, 2], [1, 4], [2, 8]] }] },
+    ]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "multi_plot 2x2: returns PNG link");
+}
+
+// 18. multi_plot + error bar (legend right, error bars inside subplot)
+{
+  const d = await callTool("multi_plot", {
+    rows: 1, cols: 2, title: "Subplot + Error + Legend",
+    plots: [
+      { row: 0, col: 0, title: "Grouped Err", series: [
+        { type: "bar", name: "A", points: [[0, 10], [1, 14], [2, 12]], group: "g", error: [1, 1.5, 1] },
+        { type: "bar", name: "B", points: [[0, 8], [1, 11], [2, 15]], group: "g", error: { plus: [1, 2, 1.5], minus: [0.5, 1, 1] } },
+      ]},
+      { row: 0, col: 1, title: "Log Err", y_scale: "log", series: [
+        { type: "line", name: "logerr", points: [[1, 10], [2, 100], [3, 1000], [4, 1]], error: [2, 20, 200, 2] },
+      ]},
+    ]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "multi_plot error bar: returns PNG link");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
