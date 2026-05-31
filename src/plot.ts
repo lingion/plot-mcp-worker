@@ -511,6 +511,8 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
       color: typeof first.color === "string" && first.color ? first.color : DEFAULT_PALETTE[0],
       points,
     }];
+    const userYMin = parseNumber(args.y_min, NaN);
+    const userYMax = parseNumber(args.y_max, NaN);
     return {
       title: safeTitle(args.title, "Histogram"),
       xlabel: safeLabel(args.xlabel, "Bin"),
@@ -527,14 +529,18 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
       },
       xMin: -0.5,
       xMax: bins.length - 0.5,
-      yMin: 0,
-      yMax: Math.max(1, ...bins.map((bin) => bin.count)) * 1.1,
+      yMin: Number.isFinite(userYMin) ? userYMin : 0,
+      yMax: Number.isFinite(userYMax) ? userYMax : Math.max(1, ...bins.map((bin) => bin.count)) * 1.1,
     };
   }
 
   if (firstType === "box") {
     const groups = input.map((item, index) => buildBoxGroup((item && typeof item === "object") ? item as Record<string, unknown> : {}, index));
     const yValues = groups.flatMap((group) => [group.lowerWhisker, group.q1, group.median, group.q3, group.upperWhisker, ...group.outliers]);
+    const userYMin = parseNumber(args.y_min, NaN);
+    const userYMax = parseNumber(args.y_max, NaN);
+    const autoYMin = Math.min(...yValues) - Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1);
+    const autoYMax = Math.max(...yValues) + Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1);
     return {
       title: safeTitle(args.title, "Box Plot"),
       xlabel: safeLabel(args.xlabel, "Group"),
@@ -547,8 +553,8 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
       boxPlot: { groups },
       xMin: -0.5,
       xMax: groups.length - 0.5,
-      yMin: Math.min(...yValues) - Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1),
-      yMax: Math.max(...yValues) + Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1),
+      yMin: Number.isFinite(userYMin) ? userYMin : autoYMin,
+      yMax: Number.isFinite(userYMax) ? userYMax : autoYMax,
     };
   }
 

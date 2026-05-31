@@ -269,7 +269,7 @@ function renderHistogramBars(spec: PlotSpec, plotX: number, plotY: number, plotW
     const top = Math.min(y, baseY);
     const height = Math.max(1, Math.abs(baseY - y));
     const label = formulaText(bin.label);
-    return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${hist.color}" opacity="0.85" rx="4"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 22}" font-size="11" text-anchor="middle" fill="#374151" transform="rotate(-35 ${centerX.toFixed(2)} ${plotY + plotHeight + 22})">${label}</text><text x="${centerX.toFixed(2)}" y="${top - 6}" font-size="13" text-anchor="middle" fill="#111827" font-weight="600">${bin.count}</text></g>`;
+    return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${hist.color}" opacity="0.85" rx="4"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 22}" font-size="12" text-anchor="middle" fill="#374151">${label}</text><text x="${centerX.toFixed(2)}" y="${top - 6}" font-size="13" text-anchor="middle" fill="#111827" font-weight="600">${bin.count}</text></g>`;
   }).join("");
 }
 

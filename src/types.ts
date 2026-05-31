@@ -83,6 +83,19 @@ export type AnalysisAction = "describe" | "corr" | "groupby";
 
 export type Geometry3DKind = "shape" | "scatter3d" | "line3d" | "surface3d";
 
+// ── Tool input contract ──
+
+export interface ToolInput {
+  /** Canonical or legacy tool name */
+  name: string;
+  /** Tool-specific parameters */
+  arguments: Record<string, unknown>;
+  /** Output control — optional, defaults vary by tool */
+  render?: {
+    format?: RenderFormat;
+  };
+}
+
 // ── Stats results ──
 
 export interface DescribeResult {

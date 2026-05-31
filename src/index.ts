@@ -2214,6 +2214,8 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     ylabel: limitText(args.ylabel, "y", MAX_LABEL_LENGTH),
     grid: args.grid ?? true,
     annotations: ensureArray<unknown>(args.annotations).slice(0, 24),
+    y_min: args.y_min,
+    y_max: args.y_max,
   };
 }
 
