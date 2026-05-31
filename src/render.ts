@@ -1,6 +1,7 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
+import helveticaNeue from "./HelveticaNeue";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
 import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
@@ -174,10 +175,14 @@ function plainLegendLabel(text: string): string {
 }
 
 function renderLegend(spec: PlotSpec, width: number): string {
-  return spec.series.map((series, index) => {
+  const unique = "ZZZZ_UNIQUE_SENTINEL_2043";
+  const sentinel = `<!-- LEGEND_SENTINEL:${unique} -->${spec.series.map((series, index) => {
     const y = 90 + index * 28;
-    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${plainLegendLabel(series.name)}</text></g>`;
-  }).join("");
+    const rawLabel = series.name ?? `Series ${index + 1}`;
+    const plain = plainLegendLabel(rawLabel);
+    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${plain}</text></g>`;
+  }).join("")}`;
+  return sentinel;
 }
 
 function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
@@ -591,14 +596,14 @@ export function renderSpecToSvg(spec: PlotSpec): string {
 
 export async function renderPngBase64(svg: string, env: Env): Promise<string> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(helveticaNeue), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: DEFAULT_BG,
     font: {
       fontBuffers,
-      defaultFontFamily: "PingFang SC",
-      sansSerifFamily: "PingFang SC",
+      defaultFontFamily: "Helvetica Neue",
+      sansSerifFamily: "Helvetica Neue",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
@@ -609,14 +614,14 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
 
 export async function renderPngResponse(svg: string, env: Env): Promise<Response> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(helveticaNeue), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: DEFAULT_BG,
     font: {
       fontBuffers,
-      defaultFontFamily: "PingFang SC",
-      sansSerifFamily: "PingFang SC",
+      defaultFontFamily: "Helvetica Neue",
+      sansSerifFamily: "Helvetica Neue",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
