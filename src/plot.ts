@@ -248,24 +248,39 @@ function applyDownsample(s: NormalizedSeries, t: DownsampleTransform, warnings: 
     });
     return { ...s, points: newPts };
   }
-  // minmax: preserve extremes per bucket
-  const newPts: PlotPoint[] = [];
+  // minmax: preserve extremes per bucket — O(N) via original-index tracking
+  // Assign original indices to all points upfront (O(N) once)
+  interface IdxPt { pt: PlotPoint; idx: number }
+  const indexed: IdxPt[] = pts.map((pt, idx) => ({ pt, idx }));
   const bucketSize = pts.length / maxPoints;
+  const candidates: IdxPt[] = [];
   for (let i = 0; i < maxPoints; i++) {
     const start = Math.floor(i * bucketSize);
-    const end = Math.floor((i + 1) * bucketSize);
-    const bucket = pts.slice(start, end);
+    const end = Math.min(Math.floor((i + 1) * bucketSize), pts.length);
+    const bucket = indexed.slice(start, end);
     if (bucket.length === 0) continue;
-    let minPt = bucket[0], maxPt = bucket[0];
-    for (const p of bucket) {
-      if (p.y < minPt.y) minPt = p;
-      if (p.y > maxPt.y) maxPt = p;
+    let min = bucket[0], max = bucket[0];
+    for (let j = 1; j < bucket.length; j++) {
+      const { pt: p, idx: pj } = bucket[j];
+      const { pt: mn, idx: mj } = min;
+      const { pt: mx, idx: xj } = max;
+      if (p.y < mn.y || (p.y === mn.y && pj < mj)) min = bucket[j];
+      if (p.y > mx.y || (p.y === mx.y && pj < xj)) max = bucket[j];
     }
-    newPts.push(minPt, maxPt);
+    candidates.push(min);
+    if (max !== min) candidates.push(max);
   }
-  // Deduplicate adjacent equal points
-  const deduped = newPts.filter((p, i) => i === 0 || p.x !== newPts[i - 1].x || p.y !== newPts[i - 1].y);
-  return { ...s, points: deduped };
+  // Sort by original index (bucket order), then deduplicate consecutive equal entries
+  candidates.sort((a, b) => a.idx - b.idx);
+  const result: PlotPoint[] = [];
+  for (const { pt, idx } of candidates) {
+    const prev = result[result.length - 1];
+    if (!prev || prev.x !== pt.x || prev.y !== pt.y) {
+      result.push(pt);
+    }
+    // Note: if prev.x === pt.x && prev.y === pt.y → same point in adjacent buckets → skip (correct)
+  }
+  return { ...s, points: result };
 }
 
 export interface HistogramBin {
