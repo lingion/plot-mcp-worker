@@ -2216,6 +2216,9 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     annotations: ensureArray<unknown>(args.annotations).slice(0, 24),
     y_min: args.y_min,
     y_max: args.y_max,
+    y_scale: args.y_scale,
+    bar_style: args.bar_style,
+    categories: args.categories,
   };
 }
 

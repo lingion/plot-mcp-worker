@@ -71,8 +71,51 @@ function mapX(x: number, xMin: number, xMax: number, plotX: number, plotWidth: n
   return plotX + ((x - xMin) / (xMax - xMin)) * plotWidth;
 }
 
-function mapY(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number): number {
-  return plotY + plotHeight - ((y - yMin) / (yMax - yMin)) * plotHeight;
+function formatTick(v: number, scale?: string): string {
+  if (scale === "log") {
+    const p = Math.log10(Math.abs(v));
+    if (Math.abs(p - Math.round(p)) < 0.01) {
+      const exp = Math.round(p);
+      if (exp === 0) return "1";
+      if (exp === 1) return "10";
+      return `10^${exp}`;
+    }
+    return v.toFixed(v >= 100 ? 0 : 1);
+  }
+  return v.toFixed(2);
+}
+
+function mapYLog(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number): number {
+  if (y <= 0) y = 1e-10;
+  if (yMin <= 0) yMin = 1e-10;
+  if (yMax <= 0) yMax = 1e-10;
+  const logY = Math.log10(y);
+  const logMin = Math.log10(yMin);
+  const logMax = Math.log10(yMax);
+  if (logMax === logMin) return plotY + plotHeight / 2;
+  const raw = plotY + plotHeight - ((logY - logMin) / (logMax - logMin)) * plotHeight;
+  return Math.max(plotY, Math.min(plotY + plotHeight, raw));
+}
+
+function mapY(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number, scale?: string): number {
+  if (scale === "log") return mapYLog(y, yMin, yMax, plotY, plotHeight);
+  const raw = plotY + plotHeight - ((y - yMin) / (yMax - yMin)) * plotHeight;
+  return Math.max(plotY, Math.min(plotY + plotHeight, Number.isFinite(raw) ? raw : plotY + plotHeight));
+}
+
+function clampY(y: number, plotY: number, plotHeight: number): number {
+  return Math.max(plotY, Math.min(plotY + plotHeight, y));
+}
+
+// Bind mapY to a spec's y-scale for cleaner call sites
+function bindMapY(spec: PlotSpec, plotY: number, plotHeight: number): (y: number) => number {
+  const scale = spec.yScale;
+  const yMin = spec.yMin;
+  const yMax = spec.yMax;
+  if (scale === "log") {
+    return (y) => mapYLog(y, yMin, yMax, plotY, plotHeight);
+  }
+  return (y) => mapY(y, yMin, yMax, plotY, plotHeight);
 }
 
 function toScriptText(text: string, map: Record<string, string>): string {
@@ -100,19 +143,15 @@ function formulaText(text: string): string {
 
 function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
   if (points.length === 0) return "";
-  const xSpan = spec.xMax - spec.xMin;
-  const ySpan = spec.yMax - spec.yMin;
-  const typicalDx = points.length > 1 ? Math.max(1e-9, xSpan / Math.max(1, points.length - 1)) : xSpan;
   return points
     .map((point, index) => {
-      const previous = index > 0 ? points[index - 1] : null;
-      const jump = previous
-        ? Math.abs(point.y - previous.y) > ySpan * 0.45 || Math.abs(point.x - previous.x) > typicalDx * 2.5
-        : false;
       const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
-      return `${index === 0 || jump ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      // Skip NaN/Infinity points (break path), otherwise continuous line
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
+      return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     })
+    .filter(Boolean)
     .join(" ");
 }
 
@@ -126,7 +165,9 @@ function renderLegend(spec: PlotSpec, width: number): string {
 function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
   if (!spec.barMode && spec.mode !== "bar") return "";
 
-  const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+  // Bar baseline: in log scale, use domainMin (0 is invalid); in linear, use 0
+  const baselineValue = spec.yScale === "log" ? spec.yMin : 0;
+  const zeroY = mapY(baselineValue, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
 
   // Multi-series bar: grouped or stacked
   const barSeries = spec.series.filter((s) => s.type === "bar" || spec.mode === "bar");
@@ -140,7 +181,7 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
     const barWidth = Math.max(12, slotWidth * 0.64);
     return barSeries[0].points.map((point, index) => {
       const centerX = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       const top = Math.min(y, zeroY);
       const height = Math.max(1, Math.abs(zeroY - y));
       const label = formulaText(spec.categories?.[index] || String(index + 1));
@@ -168,9 +209,9 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
 
       for (let sIdx = 0; sIdx < numSeries; sIdx++) {
         const val = barSeries[sIdx].points[catIdx]?.y || 0;
-        const yBot = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight);
+        const yBot = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
         cumulativeY += val;
-        const yTop = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight);
+        const yTop = mapY(cumulativeY, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
         const top = Math.min(yBot, yTop);
         const h = Math.max(1, Math.abs(yBot - yTop));
         const rx = sIdx === numSeries - 1 ? 6 : 0;
@@ -195,7 +236,7 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
 
     for (let sIdx = 0; sIdx < numSeries; sIdx++) {
       const val = barSeries[sIdx].points[catIdx]?.y || 0;
-      const y = mapY(val, spec.yMin, spec.yMax, plotY, plotHeight);
+      const y = mapY(val, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       const top = Math.min(y, zeroY);
       const h = Math.max(1, Math.abs(zeroY - y));
       const x = groupStart + sIdx * (barWidth + intraGap);
@@ -209,12 +250,12 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
 function firstSeriesAreaPath(spec: PlotSpec, xMin: number, xMax: number, plotX: number, plotY: number, plotWidth: number, plotHeight: number) {
   const points = spec.series[0]?.points.filter((point) => point.x >= xMin && point.x <= xMax) || [];
   if (points.length < 2) return "";
-  const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+  const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
   const start = points[0];
   const end = points[points.length - 1];
   const top = points.map((point, index) => {
     const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(" ");
   const endX = mapX(end.x, spec.xMin, spec.xMax, plotX, plotWidth);
@@ -237,12 +278,12 @@ function renderAnnotations(spec: PlotSpec, plotX: number, plotY: number, plotWid
   }).join("");
   const pointLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "point" }> => item.kind === "point").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     return `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="6" fill="${item.color}" stroke="#fff" stroke-width="2"/><text x="${(x + 10).toFixed(2)}" y="${(y - 10).toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${formulaText(item.label)}</text></g>`;
   }).join("");
   const labelLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "label" }> => item.kind === "label").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight);
+    const y = mapY(item.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-size="17" fill="${item.color}" font-weight="600">${formulaText(item.text)}</text>`;
   }).join("");
   return `${areaLayer}${lineLayer}${pointLayer}${labelLayer}`;
@@ -257,7 +298,16 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const plotHeight = height - 220;
   const gridLines = 5;
   const xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
-  const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+  // Generate y-axis ticks — linear or log scale
+  let yTicks: number[];
+  if (spec.yScale === "log" && spec.yMin > 0 && spec.yMax > 0) {
+    const logMin = Math.floor(Math.log10(spec.yMin));
+    const logMax = Math.ceil(Math.log10(spec.yMax));
+    yTicks = [];
+    for (let p = logMin; p <= logMax; p++) yTicks.push(Math.pow(10, p));
+  } else {
+    yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+  }
 
   const grid = spec.grid ? [
     ...xTicks.map((tick) => {
@@ -265,24 +315,24 @@ export function renderPlotSvg(spec: PlotSpec): string {
       return `<line x1="${x}" y1="${plotY}" x2="${x}" y2="${plotY + plotHeight}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
     }),
     ...yTicks.map((tick) => {
-      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
     })
   ].join("") : "";
 
   const tickLabels = (spec.barMode || spec.mode === "bar") ? [
     ...yTicks.map((tick) => {
-      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
-      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(2)}</text>`;
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("") : [
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${tick.toFixed(2)}</text>`;
+      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
     }),
     ...yTicks.map((tick) => {
-      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
-      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(2)}</text>`;
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("");
 
@@ -290,7 +340,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
     const path = makePath(series.points, spec, plotX, plotY, plotWidth, plotHeight);
     const circles = series.type === "line" ? "" : series.points.map((point) => {
       const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-      const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+      const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
     }).join("");
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
@@ -302,8 +352,8 @@ export function renderPlotSvg(spec: PlotSpec): string {
         const err = series.error![i];
         if (!Number.isFinite(err) || err <= 0) return "";
         const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-        const cyTop = mapY(point.y + err, spec.yMin, spec.yMax, plotY, plotHeight);
-        const cyBot = mapY(point.y - err, spec.yMin, spec.yMax, plotY, plotHeight);
+        const cyTop = mapY(point.y + err, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+        const cyBot = mapY(point.y - err, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
         const capW = 6;
         return `<g>
           <line x1="${cx}" y1="${cyTop}" x2="${cx}" y2="${cyBot}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
@@ -319,10 +369,10 @@ export function renderPlotSvg(spec: PlotSpec): string {
       const count = series.points.length;
       const slotWidth = plotWidth / Math.max(count, 1);
       const barWidth = Math.max(12, slotWidth * 0.64);
-      const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+      const zeroY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       barOverlay = series.points.map((point) => {
         const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-        const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight);
+        const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
         const top = Math.min(y, zeroY);
         const h = Math.max(1, Math.abs(zeroY - y));
         return `<rect x="${(cx - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${series.color}" opacity="0.7" rx="4"/>`;
@@ -368,8 +418,8 @@ function renderHistogramBars(spec: PlotSpec, plotX: number, plotY: number, plotW
   const barWidth = Math.max(12, slotWidth * 0.82);
   return hist.bins.map((bin, index) => {
     const centerX = mapX(index, spec.xMin, spec.xMax, plotX, plotWidth);
-    const y = mapY(bin.count, spec.yMin, spec.yMax, plotY, plotHeight);
-    const baseY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+    const y = mapY(bin.count, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    const baseY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     const top = Math.min(y, baseY);
     const height = Math.max(1, Math.abs(baseY - y));
     const label = formulaText(bin.label);
@@ -383,23 +433,23 @@ function renderBoxPlotSvg(spec: PlotSpec, plotX: number, plotY: number, plotWidt
   const gridLines = 5;
   const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
   const gridParts = spec.grid ? yTicks.map((tick) => {
-    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
   }).join("") : "";
   const tickLabels = yTicks.map((tick) => {
-    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
-    return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(2)}</text>`;
+    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
   }).join("");
   const groupWidth = plotWidth / bp.groups.length;
   const boxWidth = Math.min(80, groupWidth * 0.6);
   const boxes = bp.groups.map((group, index) => {
     const cx = plotX + (index + 0.5) * groupWidth;
     const halfBox = boxWidth / 2;
-    const yMedian = mapY(group.median, spec.yMin, spec.yMax, plotY, plotHeight);
-    const yQ1 = mapY(group.q1, spec.yMin, spec.yMax, plotY, plotHeight);
-    const yQ3 = mapY(group.q3, spec.yMin, spec.yMax, plotY, plotHeight);
-    const yLW = mapY(group.lowerWhisker, spec.yMin, spec.yMax, plotY, plotHeight);
-    const yUW = mapY(group.upperWhisker, spec.yMin, spec.yMax, plotY, plotHeight);
+    const yMedian = mapY(group.median, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    const yQ1 = mapY(group.q1, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    const yQ3 = mapY(group.q3, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    const yLW = mapY(group.lowerWhisker, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    const yUW = mapY(group.upperWhisker, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
     const parts: string[] = [];
     parts.push(`<line x1="${cx}" y1="${yLW}" x2="${cx}" y2="${yQ1}" stroke="${group.color}" stroke-width="2"/>`);
     parts.push(`<line x1="${cx}" y1="${yQ3}" x2="${cx}" y2="${yUW}" stroke="${group.color}" stroke-width="2"/>`);
@@ -408,7 +458,7 @@ function renderBoxPlotSvg(spec: PlotSpec, plotX: number, plotY: number, plotWidt
     parts.push(`<rect x="${cx - halfBox}" y="${yQ3}" width="${boxWidth}" height="${Math.max(1, yQ1 - yQ3)}" fill="${group.color}" opacity="0.25" stroke="${group.color}" stroke-width="2" rx="3"/>`);
     parts.push(`<line x1="${cx - halfBox}" y1="${yMedian}" x2="${cx + halfBox}" y2="${yMedian}" stroke="${group.color}" stroke-width="3"/>`);
     group.outliers.forEach((outlier) => {
-      const yO = mapY(outlier, spec.yMin, spec.yMax, plotY, plotHeight);
+      const yO = mapY(outlier, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       parts.push(`<circle cx="${cx}" cy="${yO}" r="4" fill="none" stroke="${group.color}" stroke-width="1.5"/>`);
     });
     const catLabel = formulaText(spec.categories?.[index] || group.name);
@@ -493,12 +543,12 @@ export function renderSpecToSvg(spec: PlotSpec): string {
     const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
     const grid = spec.grid ? [
       ...yTicks.map((tick) => {
-        const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+        const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
         return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
       })
     ].join("") : "";
     const yTickLabels = yTicks.map((tick) => {
-      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(0)}</text>`;
     }).join("");
     const histBars = renderHistogramBars(spec, plotX, plotY, plotWidth, plotHeight);

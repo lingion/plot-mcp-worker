@@ -51,6 +51,8 @@ export type PlotRenderMode = "xy" | "bar" | "hist" | "box" | "pie";
 
 export type BarMode = "grouped" | "stacked";
 
+export type AxisScale = "linear" | "log";
+
 export interface PlotSpec {
   title: string;
   xlabel: string;
@@ -61,6 +63,8 @@ export interface PlotSpec {
   xMax: number;
   yMin: number;
   yMax: number;
+  yScale?: AxisScale;  // "linear" (default) | "log"
+  xScale?: AxisScale;
   categories?: string[];
   barMode?: boolean;
   barStyle?: BarMode;  // "grouped" | "stacked" for multi-series bars
@@ -245,12 +249,25 @@ function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation
     yMax += 1;
   }
   const xPad = (xMax - xMin) * 0.05;
-  const yPad = (yMax - yMin) * 0.1;
+  const yRange = yMax - yMin || 1;
+  const yPad = yRange * 0.1;
+  let finalYMin = yMin - yPad;
+  let finalYMax = yMax + yPad;
+  // Symmetric axis for data crossing zero (e.g., sin)
+  if (yMin < 0 && yMax > 0) {
+    const m = Math.max(Math.abs(finalYMin), Math.abs(finalYMax));
+    finalYMin = -m;
+    finalYMax = m;
+  }
+  // If all data is positive but padding pushes yMin below zero, clamp
+  if (yMin > 0 && finalYMin <= 0) {
+    finalYMin = yMin * 0.5;
+  }
   return {
     xMin: xMin - xPad,
     xMax: xMax + xPad,
-    yMin: yMin - yPad,
-    yMax: yMax + yPad,
+    yMin: finalYMin,
+    yMax: finalYMax,
   };
 }
 
@@ -679,6 +696,7 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     annotations,
     mode: hasBar ? "bar" : "xy",
     barStyle,
+    yScale: args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale,
     ...calculateBounds(series, annotations, barStyle),
   };
 }
