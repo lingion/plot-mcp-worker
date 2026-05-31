@@ -91,7 +91,7 @@ function logTickSvg(v: number, x: number, y: number, anchor: string): string {
     const exp = Math.round(p);
     if (exp === 0) return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">1</text>`;
     if (exp === 1) return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">10</text>`;
-    return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">10<tspan dy="-5" font-size="11">${exp}</tspan></text>`;
+    return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">10<tspan baseline-shift="super" font-size="11">${exp}</tspan></text>`;
   }
   return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">${v.toFixed(v >= 100 ? 0 : 1)}</text>`;
 }
@@ -155,7 +155,10 @@ function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: num
   return points
     .map((point, index) => {
       const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-      const y = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const yRaw = point.y;
+      // In log mode, skip non-positive points (log undefined) — breaks the path segment
+      if (spec.yScale === "log" && yRaw <= 0) return "";
+      const y = mapY(yRaw, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       // Skip NaN/Infinity points (break path), otherwise continuous line
       if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
       return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
