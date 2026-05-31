@@ -571,28 +571,7 @@ const TOOLS = [
     },
   },
   // ── Canonical tools (Phase 1) ──
-  {
-    name: "plot",
-    description: "Plot one or more mathematical expressions. Accepts a single expression (expr) or multiple (exprs). Use render.format to control output: json (default), png, link, svg, html.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        expr: { type: "string", description: "Single expression, e.g. sin(x)" },
-        exprs: { type: "array", items: { type: "string" }, description: "Multiple expressions for overlay" },
-        pieces: { type: "array", items: piecewiseSegmentSchema, minItems: 1 },
-        labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
-        x_min: { type: "number", default: -10 },
-        x_max: { type: "number", default: 10 },
-        points: { type: "integer", default: 1000 },
-        title: { type: "string" },
-        xlabel: { type: "string" },
-        ylabel: { type: "string" },
-        annotations: { type: "array", items: plotAnnotationSchema },
-        render: { type: "object", properties: { format: { type: "string", enum: ["png", "svg", "json", "link", "html"] } }, additionalProperties: false },
-      },
-      additionalProperties: false,
-    },
-  },
+  // Note: "plot" uses the legacy "plot" name above — canonical routing handles exprs/render via resolveCanonicalToLegacy
   {
     name: "plot_series",
     description: "Plot custom point series (line/scatter). Use render.format to control output. Pass categories+values for bar charts.",

@@ -403,7 +403,7 @@ function pearsonCorrelation(a: number[], b: number[]) {
 }
 
 export function analyzeData(args: Record<string, unknown>) {
-  const op = String(args.op || args.kind || args.analysis || "describe");
+  const op = String(args.op || args.action || args.kind || args.analysis || "describe");
   if (op === "describe") {
     return { ok: true, op, stats: describeValues(args.data) };
   }
