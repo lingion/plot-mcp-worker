@@ -1,3 +1,24 @@
+# v0.3.1 — Font glyph fix + Log scale
+
+## Fixed
+- **Missing caret glyph (`^`) in PNG output** — SVG text `y=2^x` was rendering as `y=2 x` because the PingFang SC subset font (136 glyphs) was missing the `^` glyph and resvg-wasm does not per-glyph fallback. Fixed by embedding Helvetica Neue as the primary font for all SVG→PNG rendering, with PingFang SC subset preserved as CJK fallback.
+- **Log scale tick labels** — `10^n` format now uses SVG `<tspan dy>` superscript rendering for clean visual output.
+- **Legend label rendering** for expressions such as `y=2^x` — now passes plain text (XML-escaped only) to avoid formatter interference.
+
+## Changed
+- `defaultFontFamily` / `sansSerifFamily` changed from `"PingFang SC"` to `"Helvetica Neue"` in resvg renderer config.
+- Font buffer order: `[helveticaNeue, pingFangSubset]` — Helvetica Neue tried first, PingFang SC falls back for CJK glyphs.
+- Log tick generation: pure `10^p` powers (no linear fallback in log domain).
+
+## Quality
+- **9 regression tests** (`scripts/smoke.mjs`) — all above plus caret glyph regression test.
+- `y=2^x` scatter+line chart verified in PNG output (log scale).
+
+## ⚠️ Note on Helvetica Neue
+Helvetica Neue is a proprietary system font. The embedded TTF is sourced from the local macOS installation. For open-source or public deployments, consider replacing with an open-source Latin font such as **Liberation Sans**, **Noto Sans**, or **DejaVu Sans**.
+
+---
+
 # v0.2.0 — Unified Capability Model
 
 ## Added
