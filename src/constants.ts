@@ -33,9 +33,9 @@ export const DEFAULT_WIDTH = 1500;
 export const DEFAULT_HEIGHT = 750;
 export const DEFAULT_FONT_FAMILY = "sans-serif";
 export const DEFAULT_FONT_SIZE = 20;
-export const DEFAULT_BG = "#ffffff";
+export const DEFAULT_BG = "transparent";
 export const DEFAULT_AXIS = "#111827";
-export const DEFAULT_GRID = "#e5e7eb";
+export const DEFAULT_GRID = "rgba(128,128,128,0.15)";
 export const DEFAULT_PALETTE = [
   "#2563eb",
   "#dc2626",

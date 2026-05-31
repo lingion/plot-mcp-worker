@@ -448,8 +448,9 @@ export function renderPlotSvg(spec: PlotSpec): string {
     const circles = series.type === "line" ? "" : series.points.map((point) => {
       const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
       const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
+      return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" stroke="rgba(255,255,255,0.5)" stroke-width="1.5"/>`;
     }).join("");
+    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
     // Error bars — uses normalizeErrorAt for full ErrorInput support + log skip
@@ -492,7 +493,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
       }).join("");
     }
 
-    return `<g>${barOverlay}${line}${circles}${errorSvg}</g>`;
+    return `<g>${barOverlay}${halo}${line}${circles}${errorSvg}</g>`;
   }).join("");
 
   const barLayer = renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight);
@@ -506,7 +507,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
   <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
   <defs><clipPath id="plot-clip"><rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}"/></clipPath></defs>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
@@ -687,8 +688,9 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
     const circles = series.type === "line" ? "" : series.points.map((point) => {
       const cpx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
       const cpy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<circle cx="${cpx.toFixed(2)}" cy="${cpy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
+      return `<circle cx="${cpx.toFixed(2)}" cy="${cpy.toFixed(2)}" r="4.5" fill="${series.color}" stroke="rgba(255,255,255,0.5)" stroke-width="1.5"/>`;
     }).join("");
+    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
     let errorSvg = "";
@@ -710,7 +712,7 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
       errorSvg += `<line x1="${(cpx - capW).toFixed(2)}" y1="${cyBot.toFixed(2)}" x2="${(cpx + capW).toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>`;
     }
 
-    return `<g>${line}${circles}${errorSvg}</g>`;
+    return `<g>${halo}${line}${circles}${errorSvg}</g>`;
   }).join("");
 
   // Axis lines
@@ -719,7 +721,7 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
 
   return `<g>
     <defs><clipPath id="${clipId}"><rect x="${plotX}" y="${plotY}" width="${plotWidth.toFixed(2)}" height="${plotHeight.toFixed(2)}"/></clipPath></defs>
-    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>
     <g clip-path="url(#${clipId})">${grid}${annotationLayer}${barLayer}${seriesSvg}</g>
     ${axisBottom}${axisLeft}
     ${tickLabels}
@@ -821,7 +823,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
   <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
   <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   ${bpSvg}
@@ -855,7 +857,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
   <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
   <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
