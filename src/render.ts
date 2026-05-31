@@ -85,6 +85,17 @@ function formatTick(v: number, scale?: string): string {
   return v.toFixed(2);
 }
 
+function logTickSvg(v: number, x: number, y: number, anchor: string): string {
+  const p = Math.log10(Math.abs(v));
+  if (Math.abs(p - Math.round(p)) < 0.01) {
+    const exp = Math.round(p);
+    if (exp === 0) return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">1</text>`;
+    if (exp === 1) return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">10</text>`;
+    return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">10<tspan dy="-5" font-size="11">${exp}</tspan></text>`;
+  }
+  return `<text x="${x}" y="${y}" font-size="16" text-anchor="${anchor}" fill="#374151">${v.toFixed(v >= 100 ? 0 : 1)}</text>`;
+}
+
 function mapYLog(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number): number {
   if (y <= 0) y = 1e-10;
   if (yMin <= 0) yMin = 1e-10;
@@ -126,10 +137,8 @@ function formatFormulaText(input: string): string {
   const normalized = String(input || "").trim();
   if (!normalized) return "";
   return normalized
-    .replace(/([A-Za-zα-ωΑ-Ω])_\{([^{}]+)\}/g, (_match, head, sub) => `${head}${toScriptText(sub, SUBSCRIPT_MAP)}`)
-    .replace(/([A-Za-zα-ωΑ-Ω])_([A-Za-z0-9()+-]+)/g, (_match, head, sub) => `${head}${toScriptText(sub, SUBSCRIPT_MAP)}`)
-    .replace(/\^\{([^{}]+)\}/g, (_match, sup) => toScriptText(sup, SUPERSCRIPT_MAP))
-    .replace(/\^([A-Za-z0-9()+-]+)/g, (_match, sup) => toScriptText(sup, SUPERSCRIPT_MAP))
+    .replace(/([A-Za-zα-ωΑ-Ω])_\{([^{}]+)\}/g, (_match, head, sub) => `${head}_(${sub})`)
+    .replace(/([A-Za-zα-ωΑ-Ω])_([A-Za-z0-9()+-]+)/g, (_match, head, sub) => `${head}_${sub}`)
     .replace(/sqrt\(([^()]+)\)/g, (_match, inner) => `√(${inner})`)
     .replace(/<=/g, "≤")
     .replace(/>=/g, "≥")
@@ -323,7 +332,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const tickLabels = (spec.barMode || spec.mode === "bar") ? [
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("") : [
     ...xTicks.map((tick) => {
@@ -332,7 +341,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
     }),
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("");
 
@@ -438,7 +447,7 @@ function renderBoxPlotSvg(spec: PlotSpec, plotX: number, plotY: number, plotWidt
   }).join("") : "";
   const tickLabels = yTicks.map((tick) => {
     const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-    return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
+    return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
   }).join("");
   const groupWidth = plotWidth / bp.groups.length;
   const boxWidth = Math.min(80, groupWidth * 0.6);
@@ -549,7 +558,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
     ].join("") : "";
     const yTickLabels = yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(0)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(0)}</text>`;
     }).join("");
     const histBars = renderHistogramBars(spec, plotX, plotY, plotWidth, plotHeight);
     return `<?xml version="1.0" encoding="UTF-8"?>
