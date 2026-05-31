@@ -167,10 +167,16 @@ function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: num
     .join(" ");
 }
 
+function plainLegendLabel(text: string): string {
+  // Legend labels: NO math formatting, NO tspan, NO superscript parsing.
+  // Just escape XML special chars and output as plain text.
+  return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function renderLegend(spec: PlotSpec, width: number): string {
   return spec.series.map((series, index) => {
     const y = 90 + index * 28;
-    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${formulaText(series.name)}</text></g>`;
+    return `<g><rect x="${width - 290}" y="${y - 12}" width="18" height="4" fill="${series.color}" rx="2"/><text x="${width - 264}" y="${y}" font-size="18" fill="#111827">${plainLegendLabel(series.name)}</text></g>`;
   }).join("");
 }
 
