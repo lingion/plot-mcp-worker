@@ -15,9 +15,51 @@ export interface NormalizedSeries {
   type: PlotSeriesType;
   color: string;
   points: PlotPoint[];
-  error?: number[];  // per-point error bars (±)
+  error?: number[];  // per-point error bars (±) — legacy symmetric form
+  errorExt?: ErrorInput;  // extended error: symmetric, asymmetric, or constant
   group?: string;    // group label for grouped/stacked bars
   stack?: string;    // stack ID for stacked bars
+}
+
+/** Normalized per-point error: always { plus, minus } or undefined */
+export type NormalizedError = { plus: number; minus: number } | undefined;
+
+/** Error input forms accepted from user */
+export type ErrorInput =
+  | number                          // constant symmetric error
+  | number[]                        // per-point symmetric error
+  | { plus?: number | number[]; minus?: number | number[] };  // asymmetric
+
+function pickErrorValue(v: number | number[] | undefined, i: number): number | undefined {
+  if (v == null) return undefined;
+  if (typeof v === "number") return v;
+  return v[i];
+}
+
+export function normalizeErrorAt(error: ErrorInput | undefined, i: number): NormalizedError {
+  if (error == null) return undefined;
+  if (typeof error === "number") {
+    if (!Number.isFinite(error) || error < 0) return undefined;
+    return { plus: error, minus: error };
+  }
+  if (Array.isArray(error)) {
+    const e = error[i];
+    if (e == null || !Number.isFinite(e) || e < 0) return undefined;
+    return { plus: e, minus: e };
+  }
+  const plus = pickErrorValue(error.plus, i);
+  const minus = pickErrorValue(error.minus, i);
+  if (plus == null && minus == null) return undefined;
+  const p = plus ?? 0;
+  const m = minus ?? 0;
+  if (!Number.isFinite(p) || !Number.isFinite(m) || p < 0 || m < 0) return undefined;
+  return { plus: p, minus: m };
+}
+
+/** Returns { plus, minus } for a constant error value (or undefined) */
+export function normalizeConstantError(error: number | undefined): NormalizedError {
+  if (error == null || !Number.isFinite(error) || error < 0) return undefined;
+  return { plus: error, minus: error };
 }
 
 export interface HistogramBin {
@@ -181,7 +223,7 @@ function normalizeAnnotations(rawAnnotations: unknown): PlotAnnotation[] {
   });
 }
 
-function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation[] = [], barStyle?: BarMode): { xMin: number; xMax: number; yMin: number; yMax: number } {
+function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation[] = [], barStyle?: BarMode, yScale?: AxisScale): { xMin: number; xMax: number; yMin: number; yMax: number } {
   const all = series.flatMap((item) => item.points);
   const pointAnnotations = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "point" | "label" }> => item.kind === "point" || item.kind === "label");
   const verticalAnnotations = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "vertical_line" }> => item.kind === "vertical_line");
@@ -209,15 +251,22 @@ function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation
     ys = [...all.map((item) => item.y), ...pointAnnotations.map((item) => item.y)];
   }
 
-  // Extend for error bars
+  // Extend for error bars (handles legacy error:number[] and new errorExt:ErrorInput)
   for (const s of series) {
-    if (s.error) {
-      for (let i = 0; i < Math.min(s.points.length, s.error.length); i++) {
-        const err = s.error[i];
-        if (Number.isFinite(err) && err > 0) {
-          ys.push(s.points[i].y - err);
-          ys.push(s.points[i].y + err);
-        }
+    for (let i = 0; i < s.points.length; i++) {
+      // Try errorExt first (new form), fall back to legacy error
+      const err = s.errorExt !== undefined
+        ? normalizeErrorAt(s.errorExt, i)
+        : (s.error ? normalizeErrorAt(s.error, i) : undefined);
+      if (!err) continue;
+      const { plus, minus } = err;
+      const yVal = s.points[i].y;
+      if (yScale === "log") {
+        if (yVal - minus > 0) ys.push(yVal - minus);
+        if (yVal + plus > 0) ys.push(yVal + plus);
+      } else {
+        ys.push(yVal - minus);
+        ys.push(yVal + plus);
       }
     }
   }
@@ -672,9 +721,21 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
       points: normalizePoints(Array.isArray(record.points) ? record.points as Array<[number, number]> : []),
     };
 
-    // Error bars
-    if (Array.isArray(record.error)) {
-      result.error = (record.error as unknown[]).map((v) => Number(v)).filter(Number.isFinite);
+    // Error bars — support all ErrorInput forms
+    const rawError = record.error;
+    if (rawError !== undefined && rawError !== null) {
+      if (typeof rawError === "number" && Number.isFinite(rawError as number)) {
+        // Constant error — store in errorExt
+        result.errorExt = rawError as number;
+      } else if (Array.isArray(rawError)) {
+        // Legacy symmetric array — store in error (backward compat) + also in errorExt
+        const arr = (rawError as unknown[]).map((v) => Number(v)).filter(Number.isFinite);
+        result.error = arr;
+        result.errorExt = arr;
+      } else if (typeof rawError === "object") {
+        // Asymmetric { plus, minus }
+        result.errorExt = rawError as ErrorInput;
+      }
     }
 
     // Group / stack for bars
@@ -697,7 +758,7 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     mode: hasBar ? "bar" : "xy",
     barStyle,
     yScale: args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale,
-    ...calculateBounds(series, annotations, barStyle),
+    ...calculateBounds(series, annotations, barStyle, args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale),
   };
 }
 

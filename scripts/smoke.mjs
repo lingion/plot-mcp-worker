@@ -90,8 +90,57 @@ console.log("Running regression tests...\n");
     ]
   });
   const data = d?.result?.structuredContent?.data;
-  // If PNG URL returned, the render pipeline succeeded (glyph coverage assumed OK if no 500)
   assert(data && data.ok === true && data.png_url, "caret glyph regression: y=2^x render pipeline OK");
+}
+
+// 10. line + error bar
+{
+  const d = await callTool("plot_series", {
+    series: [{ type: "line", name: "line±err", points: [[1,2],[2,4],[3,6],[4,8]], error: [0.5,1,0.7,1.2] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "line error bar: returns PNG link");
+}
+
+// 11. scatter + error bar (constant error)
+{
+  const d = await callTool("plot_series", {
+    series: [{ type: "scatter", name: "scatter±err", points: [[1,2],[2,3],[3,5],[4,4]], error: 0.4 }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "scatter error bar: returns PNG link");
+}
+
+// 12. bar + error bar
+{
+  const d = await callTool("plot_series", {
+    series: [{ type: "bar", name: "bar±err", points: [[0,10],[1,15],[2,12]], error: [1.2,2.0,1.5] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "bar error bar: returns PNG link");
+}
+
+// 13. grouped bar + error bar (asymmetric)
+{
+  const d = await callTool("plot_series", {
+    bar_style: "grouped",
+    series: [
+      { type: "bar", name: "A", points: [[0,10],[1,14],[2,12]], group: "g", error: [1,1.5,1] },
+      { type: "bar", name: "B", points: [[0,8],[1,11],[2,15]], group: "g", error: { plus: [1,2,1.5], minus: [0.5,1,1] } }
+    ]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "grouped bar error bar: returns PNG link");
+}
+
+// 14. log scale + error bar skip (4th point lower<=0, skip only error bar)
+{
+  const d = await callTool("plot_series", {
+    y_scale: "log",
+    series: [{ type: "line", name: "logerr", points: [[1,10],[2,100],[3,1000],[4,1]], error: [2,20,200,2] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "log error bar skip: returns PNG link");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -2,6 +2,7 @@ import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
 import arialSans from "./ArialSans";
+import { normalizeErrorAt } from "./plot";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
 import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
@@ -248,6 +249,7 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
   // Grouped bars: multiple bars per category with intra-group gap
   const intraGap = 2;
   const barWidth = Math.max(8, (groupWidth - intraGap * (numSeries - 1)) / numSeries);
+  const capW = Math.max(6, Math.min(14, barWidth * 0.45));
   const parts: string[] = [];
 
   for (let catIdx = 0; catIdx < numCategories; catIdx++) {
@@ -258,12 +260,29 @@ function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth:
     const label = formulaText(spec.categories?.[catIdx] || String(catIdx + 1));
 
     for (let sIdx = 0; sIdx < numSeries; sIdx++) {
-      const val = barSeries[sIdx].points[catIdx]?.y || 0;
+      const s = barSeries[sIdx];
+      const val = s.points[catIdx]?.y || 0;
       const y = mapY(val, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       const top = Math.min(y, zeroY);
       const h = Math.max(1, Math.abs(zeroY - y));
-      const x = groupStart + sIdx * (barWidth + intraGap);
-      parts.push(`<rect x="${x.toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${barSeries[sIdx].color}" rx="4"/>`);
+      const barX = groupStart + sIdx * (barWidth + intraGap);
+      const cx = barX + barWidth / 2; // each bar's center
+      parts.push(`<rect x="${barX.toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${s.color}" rx="4"/>`);
+
+      // Error bar for this bar — centered on bar center, not category center
+      const err = s.errorExt !== undefined
+        ? normalizeErrorAt(s.errorExt, catIdx)
+        : (s.error ? normalizeErrorAt(s.error, catIdx) : undefined);
+      if (err) {
+        const { plus, minus } = err;
+        if (!(spec.yScale === "log" && val - minus <= 0)) {
+          const cyTop = mapY(val + plus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+          const cyBot = mapY(val - minus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+          parts.push(`<line x1="${cx.toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${cx.toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${s.color}" stroke-width="1.5"/>`);
+          parts.push(`<line x1="${(cx - capW).toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${(cx + capW).toFixed(2)}" y2="${cyTop.toFixed(2)}" stroke="${s.color}" stroke-width="1.5"/>`);
+          parts.push(`<line x1="${(cx - capW).toFixed(2)}" y1="${cyBot.toFixed(2)}" x2="${(cx + capW).toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${s.color}" stroke-width="1.5"/>`);
+        }
+      }
     }
     parts.push(`<text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${label}</text>`);
   }
@@ -368,22 +387,28 @@ export function renderPlotSvg(spec: PlotSpec): string {
     }).join("");
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
-    // Error bars
+    // Error bars — uses normalizeErrorAt for full ErrorInput support + log skip
     let errorSvg = "";
-    if (series.error && series.error.length > 0) {
-      errorSvg = series.points.slice(0, series.error.length).map((point, i) => {
-        const err = series.error![i];
-        if (!Number.isFinite(err) || err <= 0) return "";
-        const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-        const cyTop = mapY(point.y + err, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-        const cyBot = mapY(point.y - err, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-        const capW = 6;
-        return `<g>
-          <line x1="${cx}" y1="${cyTop}" x2="${cx}" y2="${cyBot}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
-          <line x1="${cx - capW}" y1="${cyTop}" x2="${cx + capW}" y2="${cyTop}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
-          <line x1="${cx - capW}" y1="${cyBot}" x2="${cx + capW}" y2="${cyBot}" stroke="${series.color}" stroke-width="1.5" opacity="0.7"/>
-        </g>`;
-      }).join("");
+    for (let i = 0; i < series.points.length; i++) {
+      const err = series.errorExt !== undefined
+        ? normalizeErrorAt(series.errorExt, i)
+        : (series.error ? normalizeErrorAt(series.error, i) : undefined);
+      if (!err) continue;
+      const { plus, minus } = err;
+      const point = series.points[i];
+      const cx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+      const yVal = point.y;
+      // Log skip: if lower bound <= 0, skip error bar but keep data point
+      if (spec.yScale === "log" && yVal - minus <= 0) continue;
+      const cyMid = mapY(yVal, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const cyTop = mapY(yVal + plus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const cyBot = mapY(yVal - minus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const capW = 10; // auto default for line/scatter
+      errorSvg += `<g>
+        <line x1="${cx.toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${cx.toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>
+        <line x1="${(cx - capW).toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${(cx + capW).toFixed(2)}" y2="${cyTop.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>
+        <line x1="${(cx - capW).toFixed(2)}" y1="${cyBot.toFixed(2)}" x2="${(cx + capW).toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>
+      </g>`;
     }
 
     // Bar series overlay (when mixed with line/scatter)
