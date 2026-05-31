@@ -961,12 +961,12 @@ export function analyzeData(args: Record<string, unknown>) {
   throw new Error("analysis op must be describe, corr, or groupby");
 }
 
-/** Auto-detect whether x-axis should use π formatting and equal aspect */
-function detectPiMode(expr: string, xMin: number, xMax: number): { xMode?: "pi"; aspect?: "equal" } {
+/** Auto-detect whether x-axis should use π formatting */
+function detectPiMode(expr: string, xMin: number, xMax: number): { xMode?: "pi" } {
   const hasTrig = /\b(sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan)\b/i.test(expr);
   const range = xMax - xMin;
   if (hasTrig && range <= 8 * Math.PI && Math.abs(xMin) <= 4 * Math.PI && Math.abs(xMax) <= 4 * Math.PI) {
-    return { xMode: "pi", aspect: "equal" };
+    return { xMode: "pi" };
   }
   return {};
 }
@@ -981,7 +981,7 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     ? [makeFunctionSeries(expr, parseInteger(args.points, 1000), xMin, xMax, DEFAULT_PALETTE[0], expr)]
     : buildPiecewiseSeries(args.pieces, parseInteger(args.points, 1000), xMin, xMax);
   // Auto-detect π mode for trig functions
-  const { xMode, aspect } = detectPiMode(expr, xMin, xMax);
+  const { xMode } = detectPiMode(expr, xMin, xMax);
   return {
     title: safeTitle(args.title, expr ? "Function Plot" : "Piecewise Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -991,7 +991,6 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     annotations,
     mode: "xy",
     ...(xMode ? { xMode } : {}),
-    ...(aspect ? { aspect } : {}),
     ...calculateBounds(series, annotations),
   };
 }
@@ -1018,7 +1017,6 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
     annotations,
     mode: "xy",
     ...(xMode ? { xMode } : {}),
-    ...(aspect ? { aspect } : {}),
     ...calculateBounds(series, annotations),
   };
 }

@@ -139,7 +139,7 @@ function logTickSvg(v: number, x: number, y: number, anchor: string): string {
     if (exp === 1) return `<text x="${x}" y="${y}" font-size="13" text-anchor="${anchor}" fill="#94a3b8">10</text>`;
     return `<text x="${x}" y="${y}" font-size="13" text-anchor="${anchor}" fill="#94a3b8">10<tspan baseline-shift="super" font-size="11">${exp}</tspan></text>`;
   }
-  return `<text x="${x}" y="${y}" font-size="13" text-anchor="${anchor}" fill="#94a3b8">${v.toFixed(v >= 100 ? 0 : 1)}</text>`;
+  return `<text x="${x}" y="${y}" font-size="13" text-anchor="${anchor}" fill="#cbd5e1">${v.toFixed(v >= 100 ? 0 : 1)}</text>`;
 }
 
 function mapYLog(y: number, yMin: number, yMax: number, plotY: number, plotHeight: number): number {
@@ -447,16 +447,16 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const tickLabels = (spec.barMode || spec.mode === "bar") ? [
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#94a3b8">${formatTick(tick, spec.yScale)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#cbd5e1">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("") : [
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="13" text-anchor="middle" fill="#94a3b8">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
+      return `<text x="${x}" y="${plotY + plotHeight + 34}" font-size="13" text-anchor="middle" fill="#cbd5e1">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
     }),
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#94a3b8">${formatTick(tick, spec.yScale)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#cbd5e1">${formatTick(tick, spec.yScale)}</text>`;
     })
   ].join("");
 
@@ -467,7 +467,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
       const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" stroke="#0f172a" stroke-opacity="0.8" stroke-width="1.5"/>`;
     }).join("");
-    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.8" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.35" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
     // Error bars — uses normalizeErrorAt for full ErrorInput support + log skip
@@ -525,7 +525,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
   <rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="12" fill="#0f172a" fill-opacity="0.92"/>
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#e5e7eb">${formulaText(spec.title)}</text>
   <defs><clipPath id="plot-clip"><rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}"/></clipPath></defs>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#e5e7eb" fill-opacity="0.75" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
@@ -570,7 +570,7 @@ function renderBoxPlotSvg(spec: PlotSpec, plotX: number, plotY: number, plotWidt
   }).join("") : "";
   const tickLabels = yTicks.map((tick) => {
     const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-    return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#94a3b8">${formatTick(tick, spec.yScale)}</text>`;
+    return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#cbd5e1">${formatTick(tick, spec.yScale)}</text>`;
   }).join("");
   const groupWidth = plotWidth / bp.groups.length;
   const boxWidth = Math.min(80, groupWidth * 0.6);
@@ -691,11 +691,11 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
   const tickLabels = [
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return spec.yScale === "log" ? logTickSvg(tick, plotX - 10, y + 5, "end") : `<text x="${plotX - 10}" y="${y + 5}" font-size="13" text-anchor="end" fill="#94a3b8">${formatTick(tick, spec.yScale)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 10, y + 5, "end") : `<text x="${plotX - 10}" y="${y + 5}" font-size="13" text-anchor="end" fill="#cbd5e1">${formatTick(tick, spec.yScale)}</text>`;
     }),
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<text x="${x.toFixed(2)}" y="${(plotY + plotHeight + 18).toFixed(2)}" font-size="13" text-anchor="middle" fill="#94a3b8">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
+      return `<text x="${x.toFixed(2)}" y="${(plotY + plotHeight + 18).toFixed(2)}" font-size="13" text-anchor="middle" fill="#cbd5e1">${spec.xMode === "pi" ? formatPiTick(tick) : formatTick(tick, spec.xScale)}</text>`;
     })
   ].join("");
 
@@ -709,7 +709,7 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
       const cpy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<circle cx="${cpx.toFixed(2)}" cy="${cpy.toFixed(2)}" r="4.5" fill="${series.color}" stroke="#0f172a" stroke-opacity="0.8" stroke-width="1.5"/>`;
     }).join("");
-    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.8" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.35" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
     let errorSvg = "";
@@ -740,7 +740,7 @@ function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
 
   return `<g>
     <defs><clipPath id="${clipId}"><rect x="${plotX}" y="${plotY}" width="${plotWidth.toFixed(2)}" height="${plotHeight.toFixed(2)}"/></clipPath></defs>
-    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#e5e7eb" fill-opacity="0.75" stroke="#334155" stroke-opacity="0.4" stroke-width="1" rx="3"/>
+    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.4" stroke-width="1" rx="3"/>
     <g clip-path="url(#${clipId})">${grid}${annotationLayer}${barLayer}${seriesSvg}</g>
     ${axisBottom}${axisLeft}
     ${tickLabels}
@@ -844,7 +844,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
   <rect width="100%" height="100%" fill="transparent"/>
   <rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="12" fill="#0f172a" fill-opacity="0.92"/>
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#e5e7eb">${formulaText(spec.title)}</text>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#e5e7eb" fill-opacity="0.75" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
   ${bpSvg}
@@ -870,7 +870,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
     ].join("") : "";
     const yTickLabels = yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#94a3b8">${tick.toFixed(0)}</text>`;
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 14, y + 6, "end") : `<text x="${plotX - 14}" y="${y + 6}" font-size="13" text-anchor="end" fill="#cbd5e1">${tick.toFixed(0)}</text>`;
     }).join("");
     const histBars = renderHistogramBars(spec, plotX, plotY, plotWidth, plotHeight);
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -879,7 +879,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
   <rect width="100%" height="100%" fill="transparent"/>
   <rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="12" fill="#0f172a" fill-opacity="0.92"/>
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#e5e7eb">${formulaText(spec.title)}</text>
-  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#e5e7eb" fill-opacity="0.75" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
   ${grid}
   <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
   <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="#475569" stroke-width="1.5"/>
