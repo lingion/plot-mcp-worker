@@ -1,0 +1,310 @@
+{
+  "version": "0.2.0",
+  "mcp_endpoint": "https://plot-mcp.qdp.qzz.io/mcp",
+  "protocol": "JSON-RPC 2.0",
+  "capabilities": {
+    "plot.function": {
+      "tool": "plot",
+      "description": "绘制单条或多条数学函数图像",
+      "params": {
+        "expr": "string — 单个表达式，如 sin(x), x**2+1",
+        "exprs": "string[] — 多个表达式叠加",
+        "x_min": "number, default -10",
+        "x_max": "number, default 10",
+        "points": "integer, default 1000",
+        "title": "string",
+        "xlabel": "string",
+        "ylabel": "string",
+        "render": { "format": "png|svg|json|link" }
+      },
+      "example": {
+        "expr": "sin(x)",
+        "x_min": -6.28, "x_max": 6.28,
+        "title": "正弦函数",
+        "render": { "format": "link" }
+      }
+    },
+    "plot.multi": {
+      "tool": "plot",
+      "description": "在同一坐标系叠加多条函数曲线",
+      "params": {
+        "exprs": "string[] — 必填，如 ['sin(x)', 'cos(x)']",
+        "labels": "string[] — 图例标签",
+        "x_min": "number, default -10",
+        "x_max": "number, default 10",
+        "title": "string",
+        "render": { "format": "png|svg|json|link" }
+      },
+      "example": {
+        "exprs": ["sin(x)", "cos(x)"],
+        "labels": ["正弦", "余弦"],
+        "title": "三角函数对比",
+        "render": { "format": "link" }
+      }
+    },
+    "plot.piecewise": {
+      "tool": "plot",
+      "description": "绘制分段函数",
+      "params": {
+        "pieces": [{ "expr": "string", "x_min": "number", "x_max": "number", "label": "string" }],
+        "title": "string",
+        "render": { "format": "png|svg|link" }
+      },
+      "example": {
+        "pieces": [
+          { "expr": "x", "x_min": -10, "x_max": 0, "label": "y=x" },
+          { "expr": "-x", "x_min": 0, "x_max": 10, "label": "y=-x" }
+        ],
+        "title": "分段函数",
+        "render": { "format": "link" }
+      }
+    },
+    "plot.annotated": {
+      "tool": "plot",
+      "description": "带标注的函数图（竖线、点、面积高亮、标签）",
+      "params": {
+        "expr": "string",
+        "annotations": [{ "kind": "vertical_line|point|label|area", "x": "number", "label": "string", "color": "string" }],
+        "render": { "format": "png|svg|link" }
+      },
+      "example": {
+        "expr": "x**2",
+        "annotations": [
+          { "kind": "point", "x": 2, "y": 4, "label": "(2,4)", "color": "#dc2626" },
+          { "kind": "area", "x_min": 0, "x_max": 2, "label": "积分区域", "color": "#2563eb", "opacity": 0.2 }
+        ],
+        "render": { "format": "link" }
+      }
+    },
+    "series.line": {
+      "tool": "plot_series",
+      "description": "绘制折线图/散点图",
+      "params": {
+        "series": [{ "name": "string", "type": "line|scatter|line+scatter", "points": "[[x,y], ...]", "color": "string" }],
+        "title": "string", "xlabel": "string", "ylabel": "string",
+        "render": { "format": "png|svg|json|link" }
+      },
+      "example": {
+        "series": [{ "name": "温度", "type": "line", "points": [[1,20],[2,22],[3,25],[4,23],[5,27]] }],
+        "title": "每日温度", "xlabel": "天", "ylabel": "°C",
+        "render": { "format": "link" }
+      }
+    },
+    "series.bar": {
+      "tool": "plot_series",
+      "description": "绘制柱状图",
+      "params": {
+        "series": [{ "type": "hist" }] ,
+        "categories": "string[]",
+        "values": "number[]",
+        "title": "string",
+        "render": { "format": "png|link" }
+      },
+      "example": {
+        "categories": ["语文","数学","英语","物理"],
+        "values": [85,92,78,88],
+        "title": "成绩单",
+        "series_name": "分数",
+        "render": { "format": "link" }
+      }
+    },
+    "series.hist": {
+      "tool": "plot_series",
+      "description": "绘制直方图，自动分箱或指定 bins",
+      "params": {
+        "series": [{ "type": "hist", "data": "number[]", "bins": "integer, default auto" }],
+        "title": "string", "xlabel": "string", "ylabel": "string",
+        "y_min": "number", "y_max": "number",
+        "render": { "format": "png|link" }
+      },
+      "example": {
+        "series": [{ "type": "hist", "name": "成绩", "data": [55,60,62,65,68,70,72,73,75,78,80,82,85,88,90,92,95], "bins": 5 }],
+        "title": "成绩分布", "xlabel": "分数区间", "ylabel": "人数",
+        "render": { "format": "link" }
+      }
+    },
+    "series.box": {
+      "tool": "plot_series",
+      "description": "绘制箱线图，自动计算四分位数和离群点",
+      "params": {
+        "series": [{ "type": "box", "data": "number[]", "name": "string" }],
+        "title": "string", "ylabel": "string",
+        "y_min": "number", "y_max": "number",
+        "render": { "format": "png|link" }
+      },
+      "example": {
+        "series": [
+          { "type": "box", "name": "数学", "data": [60,65,70,72,75,78,80,82,85,100] },
+          { "type": "box", "name": "英语", "data": [50,55,60,65,68,70,72,75,78,95] }
+        ],
+        "title": "成绩箱线图", "ylabel": "分数",
+        "y_min": 40, "y_max": 110,
+        "render": { "format": "link" }
+      }
+    },
+    "series.pie": {
+      "tool": "plot_series",
+      "description": "绘制饼图（环形），显示比例和标签",
+      "params": {
+        "series": [{ "type": "pie", "labels": "string[]", "values": "number[]", "name": "string" }],
+        "title": "string",
+        "render": { "format": "png|link" }
+      },
+      "example": {
+        "series": [{ "type": "pie", "name": "份额", "labels": ["产品A","产品B","产品C","产品D"], "values": [35,28,22,15] }],
+        "title": "市场份额",
+        "render": { "format": "link" }
+      }
+    },
+    "analysis.describe": {
+      "tool": "analysis",
+      "description": "描述性统计：count/min/max/mean/median/std/variance/Q1/Q3/IQR/sum",
+      "params": {
+        "action": "describe",
+        "data": "number[]"
+      },
+      "example": {
+        "action": "describe",
+        "data": [1,2,3,4,5,6,7,8,9,10]
+      }
+    },
+    "analysis.corr": {
+      "tool": "analysis",
+      "description": "Pearson 相关系数矩阵",
+      "params": {
+        "action": "corr",
+        "series": [{ "name": "string", "data": "number[]" }]
+      },
+      "example": {
+        "action": "corr",
+        "series": [
+          { "name": "身高", "data": [160,165,170,175,180] },
+          { "name": "体重", "data": [50,55,65,70,80] }
+        ]
+      }
+    },
+    "analysis.groupby": {
+      "tool": "analysis",
+      "description": "分组统计：按 groups 分组后每组返回 describe",
+      "params": {
+        "action": "groupby",
+        "data": "number[]",
+        "groups": "string[] — 与 data 等长"
+      },
+      "example": {
+        "action": "groupby",
+        "data": [85,92,78,88,76,95,80,90],
+        "groups": ["A","A","B","B","A","B","A","B"]
+      }
+    },
+    "diagram.force": {
+      "tool": "diagram",
+      "description": "力学受力分析图（自由体图）",
+      "params": {
+        "diagram_type": "force",
+        "forces": [{ "label": "string", "angle_deg": "number", "magnitude": "number", "color": "string" }],
+        "body_label": "string, default 'm'",
+        "show_components": "boolean"
+      },
+      "example": {
+        "diagram_type": "force",
+        "body_label": "m",
+        "forces": [
+          { "label": "F", "angle_deg": 90, "magnitude": 3 },
+          { "label": "mg", "angle_deg": -90, "magnitude": 2 },
+          { "label": "N", "angle_deg": 45, "magnitude": 1.5 }
+        ]
+      }
+    },
+    "diagram.circuit": {
+      "tool": "diagram",
+      "description": "电路原理图",
+      "params": {
+        "diagram_type": "circuit",
+        "components": [{ "id": "string", "type": "resistor|capacitor|battery|switch|led|inductor", "label": "string", "value": "string" }],
+        "wires": [{ "from": "string", "to": "string" }]
+      }
+    },
+    "diagram.venn": {
+      "tool": "diagram",
+      "description": "韦恩图（集合关系）",
+      "params": {
+        "diagram_type": "venn",
+        "sets": [{ "label": "string", "size": "number" }],
+        "intersection_size": "number"
+      },
+      "example": {
+        "diagram_type": "venn",
+        "sets": [{ "label": "A", "size": 10 }, { "label": "B", "size": 8 }],
+        "intersection_size": 3
+      }
+    },
+    "diagram.c_memory": {
+      "tool": "diagram",
+      "description": "C 语言内存布局图（指针/数组/结构体）",
+      "params": {
+        "diagram_type": "c_memory",
+        "blocks": [{ "name": "string", "type": "int|char[]|ptr|struct", "value": "string", "address": "string" }]
+      }
+    },
+    "geometry.3d_shape": {
+      "tool": "geometry_3d",
+      "description": "交互式 3D 几何体查看器",
+      "params": {
+        "shape": "cube|sphere|cylinder|cone|vector3d",
+        "size": "number", "radius": "number", "height": "number",
+        "vector": "[x,y,z]",
+        "color": "string"
+      },
+      "example": { "shape": "sphere", "radius": 2, "color": "#2563eb" }
+    },
+    "geometry.scatter3d": {
+      "tool": "geometry_3d",
+      "description": "3D 散点图",
+      "params": {
+        "kind": "scatter3d",
+        "x": "number[]", "y": "number[]", "z": "number[]"
+      }
+    },
+    "geometry.line3d": {
+      "tool": "geometry_3d",
+      "description": "3D 曲线",
+      "params": {
+        "kind": "line3d",
+        "x": "number[]", "y": "number[]", "z": "number[]"
+      }
+    },
+    "geometry.surface3d": {
+      "tool": "geometry_3d",
+      "description": "3D 曲面",
+      "params": {
+        "kind": "surface3d",
+        "x": "number[][]", "y": "number[][]", "z": "number[][]"
+      }
+    },
+    "teaching.topic": {
+      "tool": "teaching",
+      "description": "生成教学可视化（抛物线/积分/简谐运动等）",
+      "params": {
+        "topic": "string — 如 quadratic, integration, shm, projectile, fourier, damped_oscillation, stress_strain, free_fall",
+        "render": { "format": "link" }
+      }
+    },
+    "template.force_analysis": {
+      "tool": "template",
+      "description": "力学分析模板（斜面/悬挂/弹簧等）",
+      "params": {
+        "template_type": "force_analysis",
+        "template": "incline|suspended|spring|circular"
+      }
+    },
+    "template.circuit": {
+      "tool": "template",
+      "description": "电路模板（串联/并联/RC/RLC）",
+      "params": {
+        "template_type": "circuit",
+        "template": "series|parallel|rc|rlc"
+      }
+    }
+  }
+}
