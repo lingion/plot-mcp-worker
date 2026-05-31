@@ -898,7 +898,7 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
   const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
-    background: DEFAULT_BG,
+    background: "transparent",
     font: {
       fontBuffers,
       defaultFontFamily: "Arial",
@@ -916,7 +916,7 @@ export async function renderPngResponse(svg: string, env: Env): Promise<Response
   const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
-    background: DEFAULT_BG,
+    background: "transparent",
     font: {
       fontBuffers,
       defaultFontFamily: "Arial",
