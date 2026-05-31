@@ -2,7 +2,7 @@ import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
 import arialSans from "./ArialSans";
-import { normalizeErrorAt } from "./plot";
+import { normalizeErrorAt, MultiPlotCell, MultiPlotResult } from "./plot";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
 import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
@@ -556,6 +556,150 @@ function renderPieSvg(spec: PlotSpec): string {
   <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
   ${slices}
 </svg>`;
+}
+
+// ── Multi-plot / subplot rendering ──────────────────────────────────────────
+
+/** Compute inner plot area within a cell */
+function cellPlotRect(cellX: number, cellY: number, cellW: number, cellH: number) {
+  const AXIS_H = 50;  // bottom axis
+  const LABEL_W = 50; // left label
+  return {
+    plotX: cellX + LABEL_W,
+    plotY: cellY,
+    plotWidth: cellW - LABEL_W,
+    plotHeight: cellH - AXIS_H,
+  };
+}
+
+/** Render a single subplot cell (grid, axes, bars, series, annotations) */
+function renderSubplotCell(cell: MultiPlotCell, cellIndex: number): string {
+  const { x: cx, y: cy, width: cw, height: ch, spec } = cell;
+  const { plotX, plotY, plotWidth, plotHeight } = cellPlotRect(cx, cy, cw, ch);
+  const clipId = `clip-cell-${cellIndex}`;
+
+  const gridLines = 5;
+  const xTicks = Array.from({ length: gridLines + 1 }, (_, i) =>
+    spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+  let yTicks: number[];
+  if (spec.yScale === "log" && spec.yMin > 0 && spec.yMax > 0) {
+    const logMin = Math.floor(Math.log10(spec.yMin));
+    const logMax = Math.ceil(Math.log10(spec.yMax));
+    yTicks = [];
+    for (let p = logMin; p <= logMax; p++) yTicks.push(Math.pow(10, p));
+  } else {
+    yTicks = Array.from({ length: gridLines + 1 }, (_, i) =>
+      spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+  }
+
+  const grid = spec.grid ? [
+    ...xTicks.map((tick) => {
+      const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
+      return `<line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+    }),
+    ...yTicks.map((tick) => {
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      return `<line x1="${plotX}" y1="${y.toFixed(2)}" x2="${(plotX + plotWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+    })
+  ].join("") : "";
+
+  const tickLabels = [
+    ...yTicks.map((tick) => {
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      return spec.yScale === "log" ? logTickSvg(tick, plotX - 10, y + 5, "end") : `<text x="${plotX - 10}" y="${y + 5}" font-size="13" text-anchor="end" fill="#374151">${formatTick(tick, spec.yScale)}</text>`;
+    }),
+    ...xTicks.map((tick) => {
+      const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
+      return `<text x="${x.toFixed(2)}" y="${(plotY + plotHeight + 18).toFixed(2)}" font-size="13" text-anchor="middle" fill="#374151">${formatTick(tick, spec.xScale)}</text>`;
+    })
+  ].join("");
+
+  const barLayer = spec.barMode || spec.mode === "bar" ? renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight) : "";
+  const annotationLayer = renderAnnotations(spec, plotX, plotY, plotWidth, plotHeight);
+
+  const seriesSvg = (spec.barMode || spec.mode === "bar") ? "" : spec.series.map((series) => {
+    const path = makePath(series.points, spec, plotX, plotY, plotWidth, plotHeight);
+    const circles = series.type === "line" ? "" : series.points.map((point) => {
+      const cpx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+      const cpy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      return `<circle cx="${cpx.toFixed(2)}" cy="${cpy.toFixed(2)}" r="4.5" fill="${series.color}" />`;
+    }).join("");
+    const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+    let errorSvg = "";
+    for (let i = 0; i < series.points.length; i++) {
+      const err = series.errorExt !== undefined
+        ? normalizeErrorAt(series.errorExt, i)
+        : (series.error ? normalizeErrorAt(series.error, i) : undefined);
+      if (!err) continue;
+      const { plus, minus } = err;
+      const point = series.points[i];
+      const cpx = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+      const yVal = point.y;
+      if (spec.yScale === "log" && yVal - minus <= 0) continue;
+      const cyTop = mapY(yVal + plus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const cyBot = mapY(yVal - minus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+      const capW = 8;
+      errorSvg += `<line x1="${cpx.toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${cpx.toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>`;
+      errorSvg += `<line x1="${(cpx - capW).toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${(cpx + capW).toFixed(2)}" y2="${cyTop.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>`;
+      errorSvg += `<line x1="${(cpx - capW).toFixed(2)}" y1="${cyBot.toFixed(2)}" x2="${(cpx + capW).toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>`;
+    }
+
+    return `<g>${line}${circles}${errorSvg}</g>`;
+  }).join("");
+
+  // Axis lines
+  const axisBottom = `<line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="1.5"/>`;
+  const axisLeft = `<line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="1.5"/>`;
+
+  return `<g>
+    <defs><clipPath id="${clipId}"><rect x="${plotX}" y="${plotY}" width="${plotWidth.toFixed(2)}" height="${plotHeight.toFixed(2)}"/></clipPath></defs>
+    <rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+    <g clip-path="url(#${clipId})">${grid}${annotationLayer}${barLayer}${seriesSvg}</g>
+    ${axisBottom}${axisLeft}
+    ${tickLabels}
+    ${spec.title ? `<text x="${(cx + cw / 2).toFixed(2)}" y="${(cy + 16).toFixed(2)}" text-anchor="middle" font-size="14" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>` : ""}
+  </g>`;
+}
+
+export function renderMultiPlotSvg(result: MultiPlotResult): string {
+  const { rows, cols, gap, title, cells, outerWidth, outerHeight } = result;
+  const cellSvgs = cells.map((cell, i) => renderSubplotCell(cell, i)).join("");
+  const legend = renderLegendForMulti(cells);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${outerWidth}" height="${outerHeight}" viewBox="0 0 ${outerWidth} ${outerHeight}">
+  <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
+  <rect width="100%" height="100%" fill="${DEFAULT_BG}"/>
+  <text x="${outerWidth / 2}" y="36" text-anchor="middle" font-size="22" font-weight="700" fill="#111827">${formulaText(title)}</text>
+  ${cellSvgs}
+  ${legend}
+</svg>`;
+}
+
+function renderLegendForMulti(cells: MultiPlotCell[]): string {
+  // Collect unique series across all cells
+  const seen = new Set<string>();
+  const entries: { name: string; color: string }[] = [];
+  for (const cell of cells) {
+    for (const s of cell.spec.series) {
+      if (!seen.has(s.name)) {
+        seen.add(s.name);
+        entries.push({ name: s.name, color: s.color });
+      }
+    }
+  }
+  if (!entries.length) return "";
+  const ITEMS = entries.length;
+  const outerWidth = 800;
+  const ITEM_H = 20;
+  const legendH = ITEMS * ITEM_H + 16;
+  const lx = outerWidth - 140;
+  const ly = 60;
+  const parts = entries.map(({ name, color }, i) => {
+    const lyi = ly + 8 + i * ITEM_H;
+    return `<rect x="${lx}" y="${lyi}" width="14" height="14" fill="${color}" rx="3"/><text x="${lx + 20}" y="${lyi + 12}" font-size="13" fill="#374151">${formulaText(name)}</text>`;
+  }).join("");
+  return `<g><rect x="${lx - 8}" y="${ly - 8}" width="130" height="${legendH}" fill="#ffffff" stroke="#e5e7eb" stroke-width="1" rx="4"/>${parts}</g>`;
 }
 
 export function renderSpecToSvg(spec: PlotSpec): string {

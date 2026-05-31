@@ -69,6 +69,23 @@ export interface HistogramBin {
   label: string;
 }
 
+export interface MultiPlotSpec {
+  rows: number;
+  cols: number;
+  gap?: number;
+  sharedX?: boolean;
+  sharedY?: boolean;
+  plots: {
+    row: number;
+    col: number;
+    title?: string;
+    series: { name?: string; type?: string; points?: [number,number][]; data?: number[]; color?: string; error?: unknown; group?: string; }[];
+    xlabel?: string;
+    ylabel?: string;
+    y_scale?: AxisScale;
+  }[];
+}
+
 export interface BoxPlotGroup {
   name: string;
   color: string;
@@ -795,5 +812,158 @@ export function buildBarChart(args: Record<string, unknown>): PlotSpec {
     xMax: categories.length - 0.5,
     yMin: Math.min(0, bounds.yMin),
     yMax: bounds.yMax,
+  };
+}
+
+/** Cell rect for a subplot */
+export interface MultiPlotCell {
+  row: number;
+  col: number;
+  x: number;        // SVG x of cell origin
+  y: number;        // SVG y of cell origin
+  width: number;
+  height: number;
+  spec: PlotSpec;   // normalized single-plot spec for this cell
+}
+
+/** Built multi-plot: cell rects + union domains if shared */
+export interface MultiPlotResult {
+  title: string;
+  rows: number;
+  cols: number;
+  gap: number;
+  sharedX: boolean;
+  sharedY: boolean;
+  cells: MultiPlotCell[];
+  outerWidth: number;
+  outerHeight: number;
+}
+
+function buildOneSubplot(args: Record<string, unknown>): PlotSpec {
+  // Reuse buildSeriesPlot logic but strip the outer layout
+  const input = ensureArray<unknown>(args.series);
+  if (input.length === 0) throw new Error("subplot series is required");
+
+  const hasBar = input.some((item) => {
+    const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+    return record.type === "bar";
+  });
+
+  const series = input.map((item, index) => {
+    const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+    let type: PlotSeriesType;
+    if (record.type === "scatter") type = "scatter";
+    else if (record.type === "line+scatter") type = "line+scatter";
+    else if (record.type === "bar") type = "bar";
+    else type = "line";
+
+    const result: NormalizedSeries = {
+      name: safeLabel(record.name, `Series ${index + 1}`),
+      type,
+      color: typeof record.color === "string" && record.color ? record.color : DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+      points: normalizePoints(Array.isArray(record.points) ? record.points as Array<[number, number]> : []),
+    };
+
+    const rawError = record.error;
+    if (rawError !== undefined && rawError !== null) {
+      if (typeof rawError === "number" && Number.isFinite(rawError as number)) {
+        result.errorExt = rawError as number;
+      } else if (Array.isArray(rawError)) {
+        const arr = (rawError as unknown[]).map((v) => Number(v)).filter(Number.isFinite);
+        result.error = arr;
+        result.errorExt = arr;
+      } else if (typeof rawError === "object") {
+        result.errorExt = rawError as ErrorInput;
+      }
+    }
+
+    if (typeof record.group === "string") result.group = record.group;
+    if (typeof record.stack === "string") result.stack = record.stack;
+    return result;
+  });
+
+  const barStyle = hasBar ? (args.bar_style === "stacked" ? "stacked" as BarMode : "grouped" as BarMode) : undefined;
+  const yScale = args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale;
+
+  return {
+    title: safeTitle(args.title, ""),
+    xlabel: safeLabel(args.xlabel, "x"),
+    ylabel: safeLabel(args.ylabel, "y"),
+    grid: true,
+    series,
+    annotations: [],
+    mode: hasBar ? "bar" : "xy",
+    barStyle,
+    yScale,
+    ...calculateBounds(series, [], barStyle, yScale),
+  };
+}
+
+export function buildSubplot(args: Record<string, unknown>): MultiPlotResult {
+  const rows = Math.max(1, parseInteger(args.rows, 2));
+  const cols = Math.max(1, parseInteger(args.cols, 2));
+  const gap = Math.max(0, parseInteger(args.gap, 20));
+  const sharedX = Boolean(args.sharedX);
+  const sharedY = Boolean(args.sharedY);
+  const rawPlots = ensureArray<unknown>(args.plots);
+
+  // Constants for single-plot dimensions
+  const OUTER_W = 800;
+  const OUTER_H = 600;
+  const MARGIN = 60;
+  const CELL_W = Math.floor((OUTER_W - 2 * MARGIN - (cols - 1) * gap) / cols);
+  const CELL_H = Math.floor((OUTER_H - 2 * MARGIN - (rows - 1) * gap) / rows);
+
+  // Build each cell's spec
+  const cells: MultiPlotCell[] = rawPlots.map((rawPlot, index) => {
+    const plot = (rawPlot && typeof rawPlot === "object") ? rawPlot as Record<string, unknown> : {};
+    const row = parseInteger(plot.row, Math.floor(index / cols));
+    const col = parseInteger(plot.col, index % cols);
+    const subArgs: Record<string, unknown> = {
+      ...plot,
+      title: plot.title,
+      xlabel: plot.xlabel,
+      ylabel: plot.ylabel,
+      y_scale: plot.y_scale,
+    };
+    const spec = buildOneSubplot(subArgs);
+    return {
+      row, col,
+      x: MARGIN + col * (CELL_W + gap),
+      y: MARGIN + row * (CELL_H + gap),
+      width: CELL_W,
+      height: CELL_H,
+      spec,
+    };
+  });
+
+  // Compute union domains for shared axes
+  if (sharedY) {
+    const allYMin = Math.min(...cells.map((c) => c.spec.yMin));
+    const allYMax = Math.max(...cells.map((c) => c.spec.yMax));
+    for (const cell of cells) {
+      cell.spec.yMin = allYMin;
+      cell.spec.yMax = allYMax;
+    }
+  }
+  if (sharedX) {
+    const allXMin = Math.min(...cells.map((c) => c.spec.xMin));
+    const allXMax = Math.max(...cells.map((c) => c.spec.xMax));
+    for (const cell of cells) {
+      cell.spec.xMin = allXMin;
+      cell.spec.xMax = allXMax;
+    }
+  }
+
+  return {
+    title: safeTitle(args.title, "Multi Plot"),
+    rows,
+    cols,
+    gap,
+    sharedX,
+    sharedY,
+    cells,
+    outerWidth: OUTER_W,
+    outerHeight: OUTER_H,
   };
 }

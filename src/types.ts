@@ -83,6 +83,27 @@ export type AnalysisAction = "describe" | "corr" | "groupby";
 
 export type Geometry3DKind = "shape" | "scatter3d" | "line3d" | "surface3d";
 
+// ── Multi-plot / subplot layout ─────────────────────────────────────────────
+
+export interface MultiPlotSpec {
+  rows: number;
+  cols: number;
+  gap?: number;       // pixel gap between cells (default 20)
+  sharedX?: boolean;   // share same x-axis domain across all subplots
+  sharedY?: boolean;   // share same y-axis domain across all subplots
+  plots: SubplotSpec[];
+}
+
+export interface SubplotSpec {
+  row: number;         // 0-indexed row
+  col: number;         // 0-indexed column
+  title?: string;
+  series: PlotSeries[];
+  xlabel?: string;
+  ylabel?: string;
+  y_scale?: AxisScale;
+}
+
 // ── Tool input contract ──
 
 export interface ToolInput {

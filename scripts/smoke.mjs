@@ -143,5 +143,20 @@ console.log("Running regression tests...\n");
   assert(data && data.png_url, "log error bar skip: returns PNG link");
 }
 
+// 15. multi_plot (2x2 subplot)
+{
+  const d = await callTool("multi_plot", {
+    rows: 2, cols: 2, title: "Smoke Multi",
+    plots: [
+      { row: 0, col: 0, title: "Line", series: [{ type: "line", name: "L", points: [[0, 1], [1, 2], [2, 3]] }] },
+      { row: 0, col: 1, title: "Scatter", series: [{ type: "scatter", name: "S", points: [[0, 3], [1, 1], [2, 4]] }] },
+      { row: 1, col: 0, title: "Bar", series: [{ type: "bar", name: "B", points: [[0, 10], [1, 15], [2, 12]] }] },
+      { row: 1, col: 1, title: "L+S", series: [{ type: "line+scatter", name: "LS", points: [[0, 2], [1, 4], [2, 8]] }] },
+    ]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.svg_url, "multi_plot: returns SVG URL");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

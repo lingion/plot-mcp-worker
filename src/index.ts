@@ -1,8 +1,8 @@
 import { MAX_3D_LINE_POINTS, MAX_3D_LINES, MAX_3D_POINTS, MAX_3D_SURFACES, MAX_CIRCUIT_COMPONENTS, MAX_CIRCUIT_LAYOUT_BRANCHES, MAX_CIRCUIT_LAYOUT_ITEMS, MAX_CIRCUIT_WIRES, MAX_EXPR_LENGTH, MAX_FORCE_BODIES, MAX_FORCE_CONNECTORS, MAX_FORCE_ITEMS, MAX_FORCE_SURFACES, MAX_MULTI_IMAGE_JOBS, MAX_SURFACE_SAMPLES, Env, MAX_LABEL_LENGTH, MAX_SERIES, MAX_TITLE_LENGTH, SERVER_NAME, SERVER_VERSION, SHORT_LINK_PATH_PREFIX, SHORT_LINK_TOKEN_LENGTH, SHORT_LINK_TTL_SECONDS } from "./constants";
-import { analyzeData, buildBarChart, buildMultiPlot, buildSeriesPlot, buildSinglePlot, PlotSpec } from "./plot";
+import { analyzeData, buildBarChart, buildMultiPlot, buildSeriesPlot, buildSinglePlot, buildSubplot, MultiPlotResult, PlotSpec } from "./plot";
 import { corsHeaders, jsonRpc, jsonRpcError, toolResultPayload } from "./mcp";
 import { renderCircuitDiagramSvg, renderCMemoryDiagramSvg, renderForceAnalysisSvg, renderForceDiagramSvg, renderShape3DHtml, renderVennDiagramSvg, placeBodyOnSurface } from "./extras";
-import { renderPlotSvg, renderPngResponse, renderSpecToSvg } from "./render";
+import { renderPlotSvg, renderPngResponse, renderSpecToSvg, renderMultiPlotSvg } from "./render";
 import { clamp, ensureArray, limitText, parseCompressedBase64UrlJson, parseInteger, parseNumber, toCompressedBase64UrlFromJson } from "./utils";
 import { lookupCompat } from "./compat";
 import { route } from "./router";
@@ -395,6 +395,39 @@ const TOOLS = [
       type: "object",
       properties: { exprs: { type: "array", items: { type: "string" } }, labels: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] }, x_min: { type: "number", default: -10 }, x_max: { type: "number", default: 10 }, points: { type: "integer", default: 1000 }, title: { type: "string" }, xlabel: { type: "string" }, ylabel: { type: "string" }, annotations: { type: "array", items: plotAnnotationSchema } },
       required: ["exprs"], additionalProperties: false,
+    },
+  },
+  {
+    name: "multi_plot",
+    description: "Multi-panel subplot layout with rows, cols, shared axes, and per-cell series.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rows: { type: "integer", default: 2, description: "Number of rows" },
+        cols: { type: "integer", default: 2, description: "Number of columns" },
+        gap: { type: "integer", default: 20, description: "Pixel gap between cells" },
+        sharedX: { type: "boolean", default: false, description: "Share same x-axis domain across all subplots" },
+        sharedY: { type: "boolean", default: false, description: "Share same y-axis domain across all subplots" },
+        title: { type: "string", description: "Overall title" },
+        plots: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              row: { type: "integer" },
+              col: { type: "integer" },
+              title: { type: "string" },
+              xlabel: { type: "string" },
+              ylabel: { type: "string" },
+              y_scale: { type: "string", enum: ["linear", "log"] },
+              series: { type: "array", items: plotSeriesItemSchema, minItems: 1 },
+            },
+            required: ["series"],
+          },
+        },
+      },
+      required: ["plots"],
+      additionalProperties: false,
     },
   },
   {
@@ -3040,6 +3073,11 @@ function buildSpecFromPayload(payload: Record<string, unknown>): PlotSpec {
   if (path === "/plot_multi") return buildMultiPlot(cleaned);
   if (path === "/plot_series") return buildSeriesPlot(cleaned);
   if (path === "/plot_bar") return buildBarChart(cleaned);
+  if (path === "/multi_plot") {
+    const result = buildSubplot(cleaned);
+    const svg = renderMultiPlotSvg(result);
+    return { ok: true, status: 200, data: { svg_url: `/multi_plot?spec=${encodeURIComponent(JSON.stringify(result))}` } };
+  }
   throw new Error("invalid plot path");
 }
 
@@ -3060,6 +3098,17 @@ async function _legacyToolHandler(name: string, args: Record<string, unknown>, e
     }
     case "plot_multi_png_link": {
       return { ok: true, status: 200, data: await pngLinkPayload(args, "/plot_multi", origin, env) };
+    }
+    case "multi_plot": {
+      const result = buildSubplot(args);
+      const svg = renderMultiPlotSvg(result);
+      const encoded = encodeURIComponent(JSON.stringify(result));
+      return {
+        ok: true, status: 200, data: {
+          svg_url: `${origin}/multi_plot?spec=${encoded}`,
+          png_url: `${origin}/multi_plot.png?spec=${encoded}`,
+        },
+      };
     }
     case "plot_series":
     case "plot_series_json": {
@@ -3260,6 +3309,30 @@ export default {
         return await renderPngResponse(renderSpecToSvg(spec), env);
       } catch (error) {
         return Response.json({ ok: false, error: "bad_png_query", message: String((error as Error)?.message || error) }, { status: 400, headers: corsHeaders() });
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/multi_plot") {
+      try {
+        const specStr = url.searchParams.get("spec") || "";
+        if (!specStr) return Response.json({ ok: false, error: "missing_spec" }, { status: 400, headers: corsHeaders() });
+        const result = JSON.parse(decodeURIComponent(specStr)) as MultiPlotResult;
+        const svg = renderMultiPlotSvg(result);
+        return new Response(svg, { status: 200, headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=300", "access-control-allow-origin": "*" } });
+      } catch (error) {
+        return Response.json({ ok: false, error: "bad_multi_plot_query", message: String((error as Error)?.message || error) }, { status: 400, headers: corsHeaders() });
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/multi_plot.png") {
+      try {
+        const specStr = url.searchParams.get("spec") || "";
+        if (!specStr) return Response.json({ ok: false, error: "missing_spec" }, { status: 400, headers: corsHeaders() });
+        const result = JSON.parse(decodeURIComponent(specStr)) as MultiPlotResult;
+        const svg = renderMultiPlotSvg(result);
+        return await renderPngResponse(svg, env);
+      } catch (error) {
+        return Response.json({ ok: false, error: "bad_multi_plot_png", message: String((error as Error)?.message || error) }, { status: 400, headers: corsHeaders() });
       }
     }
 
