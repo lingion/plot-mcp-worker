@@ -1,3 +1,25 @@
+# v0.3.3 — Error bar refinement
+
+## Added
+- **ErrorInput forms**: `error: number` (constant), `error: number[]` (per-point symmetric), `error: { plus, minus }` (asymmetric — each may be number or number[])
+- **`normalizeErrorAt()`**: normalizes any ErrorInput to `{ plus, minus } | undefined` per point, used by both bounds calculation and render
+
+## Changed
+- **Error bar caps**: now visible on all error bars (line, scatter, bar, grouped bar)
+- **Cap width**: `auto = min(14, max(6, barWidth * 0.45))` for bars; `10px` default for line/scatter
+- **Opacity**: error bars use `opacity=1` (was `0.7` before)
+- **Style**: `strokeWidth=1.5`, `stroke=series.color`
+
+## Fixed
+- **Log scale skip**: when `value - minus <= 0` in log scale, the error bar is skipped cleanly; the data point itself is preserved (no fake clamped bar)
+- **Grouped bar alignment**: error bars now center on each bar's center, not category center
+
+## Quality
+- **14/14 smoke tests** — all above plus 5 new error bar tests
+- Visual tests: line/scatter/bar/grouped bar error bars + log skip case
+
+---
+
 # v0.3.2 — Replace proprietary font with Arial Sans
 
 ## Changed
