@@ -204,5 +204,66 @@ console.log("Running regression tests...\n");
   assert(data && data.png_url, "multi_plot error bar: returns PNG link");
 }
 
+// 19. normalize minmax — y=[10,20,30] → range [0,1]
+{
+  const d = await callTool("plot_series", {
+    title: "Normalize Minmax",
+    series: [{ type: "line", name: "norm", points: [[0, 10], [1, 20], [2, 30]], transforms: [{ type: "normalize", method: "minmax" }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "normalize minmax: returns PNG link");
+}
+
+// 20. normalize zscore — y=[10,20,30] → centered near 0
+{
+  const d = await callTool("plot_series", {
+    title: "Normalize Zscore",
+    series: [{ type: "line", name: "z", points: [[0, 10], [1, 20], [2, 30]], transforms: [{ type: "normalize", method: "zscore" }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "normalize zscore: returns PNG link");
+}
+
+// 21. smooth line
+{
+  const d = await callTool("plot_series", {
+    title: "Smooth Line",
+    series: [{ type: "line", name: "smoothed", points: [[0, 2], [1, 8], [2, 4], [3, 12], [4, 6]], transforms: [{ type: "smooth", window: 3 }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "smooth: returns PNG link");
+}
+
+// 22. filter scatter — keep y > 0
+{
+  const d = await callTool("plot_series", {
+    title: "Filter Scatter",
+    series: [{ type: "scatter", name: "pos", points: [[0, -2], [1, 3], [2, -1], [3, 7], [4, 2]], transforms: [{ type: "filter", target: "y", op: ">", value: 0 }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "filter scatter: returns PNG link");
+}
+
+// 23. rolling_average line
+{
+  const d = await callTool("plot_series", {
+    title: "Rolling Avg",
+    series: [{ type: "line", name: "ravg", points: [[0, 1], [1, 3], [2, 2], [3, 8], [4, 5]], transforms: [{ type: "rolling_average", window: 3 }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "rolling_average: returns PNG link");
+}
+
+// 24. downsample line — 100pts → 20
+{
+  const pts = Array.from({ length: 100 }, (_, i) => [i, Math.sin(i * 0.3) * 10 + 20]);
+  const d = await callTool("plot_series", {
+    title: "Downsample",
+    series: [{ type: "line", name: "ds", points: pts, transforms: [{ type: "downsample", method: "uniform", maxPoints: 20 }] }]
+  });
+  const data = d?.result?.structuredContent?.data;
+  assert(data && data.png_url, "downsample: returns PNG link");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

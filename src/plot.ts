@@ -19,6 +19,7 @@ export interface NormalizedSeries {
   errorExt?: ErrorInput;  // extended error: symmetric, asymmetric, or constant
   group?: string;    // group label for grouped/stacked bars
   stack?: string;    // stack ID for stacked bars
+  transforms?: TransformSpec[];  // data transforms applied in order before render
 }
 
 /** Normalized per-point error: always { plus, minus } or undefined */
@@ -62,6 +63,211 @@ export function normalizeConstantError(error: number | undefined): NormalizedErr
   return { plus: error, minus: error };
 }
 
+// ── Transform engine ─────────────────────────────────────────────────────────
+
+function warn(msg: string, warnings: string[]): void {
+  warnings.push(msg);
+}
+
+export function applySeriesTransforms(
+  series: NormalizedSeries,
+  warnings: string[]
+): NormalizedSeries {
+  if (!series.transforms || series.transforms.length === 0) return series;
+  let s = series;
+  for (const t of series.transforms) {
+    s = applyOneTransform(s, t, warnings);
+  }
+  return s;
+}
+
+function applyOneTransform(
+  s: NormalizedSeries,
+  t: TransformSpec,
+  warnings: string[]
+): NormalizedSeries {
+  switch (t.type) {
+    case "normalize": return applyNormalize(s, t, warnings);
+    case "smooth":     return applySmooth(s, t, warnings);
+    case "filter":    return applyFilter(s, t, warnings);
+    case "rolling_average": return applyRollingAverage(s, t, warnings);
+    case "downsample":      return applyDownsample(s, t, warnings);
+    default:
+      warn(`Unknown transform type "${(t as TransformSpec).type}"; skipped.`, warnings);
+      return s;
+  }
+}
+
+// ── Normalize ────────────────────────────────────────────────────────────────
+
+function applyNormalize(s: NormalizedSeries, t: NormalizeTransform, warnings: string[]): NormalizedSeries {
+  if (s.type === "hist" || s.type === "box" || s.type === "pie") {
+    warn(`normalize: not supported for ${s.type} series; skipped.`, warnings);
+    return s;
+  }
+  if (s.errorExt !== undefined || s.error) {
+    warn(`normalize: not supported when series has error bars; skipped.`, warnings);
+    return s;
+  }
+  const target = t.target ?? "y";
+  const pts = s.points.map(p => ({ x: p.x, y: p.y }));
+  if (target === "x" || target === "both") {
+    const vals = pts.map(p => p.x);
+    const n = normalizeArray(vals, t.method ?? "minmax");
+    pts.forEach((p, i) => { p.x = n[i]; });
+  }
+  if (target === "y" || target === "both") {
+    const vals = pts.map(p => p.y);
+    const n = normalizeArray(vals, t.method ?? "minmax");
+    pts.forEach((p, i) => { p.y = n[i]; });
+  }
+  return { ...s, points: pts };
+}
+
+function normalizeArray(vals: number[], method: "minmax" | "zscore" | "maxabs"): number[] {
+  if (method === "minmax") {
+    const mn = Math.min(...vals);
+    const mx = Math.max(...vals);
+    if (mx === mn) return vals.map(() => 0.5);
+    return vals.map(v => (v - mn) / (mx - mn));
+  }
+  if (method === "zscore") {
+    const n = vals.length;
+    const mean = vals.reduce((a, b) => a + b, 0) / n;
+    const variance = vals.reduce((a, v) => a + (v - mean) ** 2, 0) / n;
+    const std = Math.sqrt(variance);
+    if (std === 0) return vals.map(() => 0);
+    return vals.map(v => (v - mean) / std);
+  }
+  // maxabs
+  const maxAbs = Math.max(...vals.map(Math.abs));
+  if (maxAbs === 0) return vals.map(() => 0);
+  return vals.map(v => v / maxAbs);
+}
+
+// ── Smooth / Rolling Average ──────────────────────────────────────────────────
+
+function applySmooth(s: NormalizedSeries, t: SmoothTransform, warnings: string[]): NormalizedSeries {
+  if (s.type !== "line") {
+    warn(`smooth: only supported for line series; skipped for ${s.type}.`, warnings);
+    return s;
+  }
+  return applyRollingAverageCore(s, t.window ?? 3, t.target ?? "y", warnings);
+}
+
+function applyRollingAverage(s: NormalizedSeries, t: RollingAverageTransform, warnings: string[]): NormalizedSeries {
+  if (s.type !== "line") {
+    warn(`rolling_average: only supported for line series; skipped for ${s.type}.`, warnings);
+    return s;
+  }
+  return applyRollingAverageCore(s, t.window ?? 3, t.target ?? "y", warnings);
+}
+
+function applyRollingAverageCore(s: NormalizedSeries, window: number, target: string, warnings: string[]): NormalizedSeries {
+  if (window < 2) {
+    warn(`rolling_average: window < 2 is a no-op; returning unchanged.`, warnings);
+    return s;
+  }
+  const pts = s.points.map(p => ({ x: p.x, y: p.y }));
+  const vals = target === "x" ? pts.map(p => p.x) : pts.map(p => p.y);
+  const half = Math.floor(window / 2);
+  const smoothed = vals.map((_, i) => {
+    let sum = 0, cnt = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(vals.length - 1, i + half); j++) {
+      if (Number.isFinite(vals[j])) { sum += vals[j]; cnt++; }
+    }
+    return cnt > 0 ? sum / cnt : NaN;
+  });
+  // Replace boundary NaNs with nearest valid value
+  for (let i = 0; i < smoothed.length; i++) {
+    if (!Number.isFinite(smoothed[i])) {
+      let j = i + 1;
+      while (j < smoothed.length && !Number.isFinite(smoothed[j])) j++;
+      if (j < smoothed.length && Number.isFinite(smoothed[j])) {
+        smoothed[i] = smoothed[j];
+      } else {
+        let k = i - 1;
+        while (k >= 0 && !Number.isFinite(smoothed[k])) k--;
+        smoothed[i] = Number.isFinite(smoothed[k]) ? smoothed[k] : vals[i];
+      }
+    }
+  }
+  if (target === "x") pts.forEach((p, i) => { p.x = smoothed[i]; });
+  else pts.forEach((p, i) => { p.y = smoothed[i]; });
+  return { ...s, points: pts };
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+function applyFilter(s: NormalizedSeries, t: FilterTransform, warnings: string[]): NormalizedSeries {
+  const target = t.target ?? "y";
+  const op = t.op;
+  const val = t.value;
+  const pts = s.points.filter(p => {
+    const v = target === "x" ? p.x : p.y;
+    switch (op) {
+      case ">":  return v > val;
+      case ">=": return v >= val;
+      case "<":  return v < val;
+      case "<=": return v <= val;
+      case "==": return v === val;
+      case "!=": return v !== val;
+      default:  return true;
+    }
+  });
+  if (pts.length === 0) {
+    warn(`filter: result is empty; keeping all points.`, warnings);
+    return s;
+  }
+  // Sync errors with filtered points
+  let error = s.error;
+  if (error) {
+    // Rebuild error array to match filtered points by index
+    // Since we filter by condition, we can't easily sync — just clear error
+    warn(`filter: error bars cleared since x/y alignment changed; kept errorExt if asymmetric.`, warnings);
+  }
+  return { ...s, points: pts, error: undefined };
+}
+
+// ── Downsample ───────────────────────────────────────────────────────────────
+
+function applyDownsample(s: NormalizedSeries, t: DownsampleTransform, warnings: string[]): NormalizedSeries {
+  const maxPoints = t.maxPoints;
+  if (!Number.isFinite(maxPoints) || maxPoints < 2) {
+    warn(`downsample: maxPoints must be >= 2; no-op.`, warnings);
+    return s;
+  }
+  if (s.points.length <= maxPoints) return s;
+  const method = t.method ?? "uniform";
+  const pts = s.points;
+  if (method === "uniform") {
+    const step = (pts.length - 1) / (maxPoints - 1);
+    const newPts = Array.from({ length: maxPoints }, (_, i) => {
+      const idx = Math.round(i * step);
+      return pts[idx];
+    });
+    return { ...s, points: newPts };
+  }
+  // minmax: preserve extremes per bucket
+  const newPts: PlotPoint[] = [];
+  const bucketSize = pts.length / maxPoints;
+  for (let i = 0; i < maxPoints; i++) {
+    const start = Math.floor(i * bucketSize);
+    const end = Math.floor((i + 1) * bucketSize);
+    const bucket = pts.slice(start, end);
+    if (bucket.length === 0) continue;
+    let minPt = bucket[0], maxPt = bucket[0];
+    for (const p of bucket) {
+      if (p.y < minPt.y) minPt = p;
+      if (p.y > maxPt.y) maxPt = p;
+    }
+    newPts.push(minPt, maxPt);
+  }
+  // Deduplicate adjacent equal points
+  const deduped = newPts.filter((p, i) => i === 0 || p.x !== newPts[i - 1].x || p.y !== newPts[i - 1].y);
+  return { ...s, points: deduped };
+}
+
 export interface HistogramBin {
   x0: number;
   x1: number;
@@ -84,6 +290,53 @@ export interface MultiPlotSpec {
     ylabel?: string;
     y_scale?: AxisScale;
   }[];
+}
+
+// ── Transform types ──────────────────────────────────────────────────────────
+
+export type TransformType = "normalize" | "smooth" | "filter" | "rolling_average" | "downsample";
+
+export interface NormalizeTransform {
+  type: "normalize";
+  method?: "minmax" | "zscore" | "maxabs";
+  target?: "x" | "y";
+}
+
+export interface SmoothTransform {
+  type: "smooth";
+  method?: "moving_average";
+  window?: number;
+  target?: "x" | "y";
+}
+
+export interface FilterTransform {
+  type: "filter";
+  target?: "x" | "y";
+  op: ">" | ">=" | "<" | "<=" | "==" | "!=";
+  value: number;
+}
+
+export interface RollingAverageTransform {
+  type: "rolling_average";
+  window?: number;
+  target?: "x" | "y";
+}
+
+export interface DownsampleTransform {
+  type: "downsample";
+  method?: "uniform";
+  maxPoints: number;
+}
+
+export type TransformSpec =
+  | NormalizeTransform
+  | SmoothTransform
+  | FilterTransform
+  | RollingAverageTransform
+  | DownsampleTransform;
+
+export interface TransformWarnings {
+  warnings: string[];
 }
 
 export interface BoxPlotGroup {
@@ -141,6 +394,7 @@ export interface PlotSpec {
     slices: PieSlice[];
     total: number;
   };
+  warnings?: string[];  // non-fatal warnings from transforms or rendering
 }
 
 export interface DescribeStats {
@@ -759,24 +1013,37 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     if (typeof record.group === "string") result.group = record.group;
     if (typeof record.stack === "string") result.stack = record.stack;
 
+    // Transform pipeline
+    if (Array.isArray(record.transforms)) {
+      result.transforms = (record.transforms as unknown[]).filter(
+        (t): t is TransformSpec => t !== null && typeof t === "object" && "type" in t
+      );
+    }
+
     return result;
   });
 
   // Detect bar style
   const barStyle = hasBar ? (args.bar_style === "stacked" ? "stacked" as BarMode : "grouped" as BarMode) : undefined;
+  const yScale = args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale;
 
-  return {
+  // Apply transforms to each series and collect warnings
+  const warnings: string[] = [];
+  const transformedSeries = series.map(s => applySeriesTransforms(s, warnings));
+  const transformedSpec = {
     title: safeTitle(args.title, "Series Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
     ylabel: safeLabel(args.ylabel, "y"),
     grid: args.grid === undefined ? true : Boolean(args.grid),
-    series,
+    series: transformedSeries,
     annotations,
     mode: hasBar ? "bar" : "xy",
     barStyle,
-    yScale: args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale,
-    ...calculateBounds(series, annotations, barStyle, args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale),
+    yScale,
+    ...calculateBounds(transformedSeries, annotations, barStyle, yScale),
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
+  return transformedSpec;
 }
 
 export function buildBarChart(args: Record<string, unknown>): PlotSpec {
@@ -879,23 +1146,36 @@ function buildOneSubplot(args: Record<string, unknown>): PlotSpec {
 
     if (typeof record.group === "string") result.group = record.group;
     if (typeof record.stack === "string") result.stack = record.stack;
+
+    // Transform pipeline for subplot series
+    if (Array.isArray(record.transforms)) {
+      result.transforms = (record.transforms as unknown[]).filter(
+        (t): t is TransformSpec => t !== null && typeof t === "object" && "type" in t
+      );
+    }
+
     return result;
   });
 
   const barStyle = hasBar ? (args.bar_style === "stacked" ? "stacked" as BarMode : "grouped" as BarMode) : undefined;
   const yScale = args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale;
 
+  // Apply transforms
+  const warnings: string[] = [];
+  const transformedSeries = series.map(s => applySeriesTransforms(s, warnings));
+
   return {
     title: safeTitle(args.title, ""),
     xlabel: safeLabel(args.xlabel, "x"),
     ylabel: safeLabel(args.ylabel, "y"),
     grid: true,
-    series,
+    series: transformedSeries,
     annotations: [],
     mode: hasBar ? "bar" : "xy",
     barStyle,
     yScale,
-    ...calculateBounds(series, [], barStyle, yScale),
+    ...calculateBounds(transformedSeries, [], barStyle, yScale),
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 
