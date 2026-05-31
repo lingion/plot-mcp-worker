@@ -17,6 +17,35 @@ export interface NormalizedSeries {
   points: PlotPoint[];
 }
 
+export interface HistogramBin {
+  x0: number;
+  x1: number;
+  count: number;
+  label: string;
+}
+
+export interface BoxPlotGroup {
+  name: string;
+  color: string;
+  values: number[];
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  lowerWhisker: number;
+  upperWhisker: number;
+  outliers: number[];
+}
+
+export interface PieSlice {
+  label: string;
+  value: number;
+  color: string;
+}
+
+export type PlotRenderMode = "xy" | "bar" | "hist" | "box" | "pie";
+
 export interface PlotSpec {
   title: string;
   xlabel: string;
@@ -29,7 +58,34 @@ export interface PlotSpec {
   yMax: number;
   categories?: string[];
   barMode?: boolean;
+  mode?: PlotRenderMode;
   annotations?: PlotAnnotation[];
+  histogram?: {
+    bins: HistogramBin[];
+    color: string;
+    seriesName: string;
+  };
+  boxPlot?: {
+    groups: BoxPlotGroup[];
+  };
+  pie?: {
+    slices: PieSlice[];
+    total: number;
+  };
+}
+
+export interface DescribeStats {
+  count: number;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  std: number;
+  variance: number;
+  q1: number;
+  q3: number;
+  iqr: number;
+  sum: number;
 }
 
 const parser = new Parser({
@@ -237,6 +293,161 @@ function buildPiecewiseSeries(rawPieces: unknown, points: number, globalXMin: nu
   return series;
 }
 
+function normalizeNumberArray(raw: unknown, field: string) {
+  const values = ensureArray<unknown>(raw).map((item) => Number(item)).filter((item) => Number.isFinite(item));
+  if (values.length === 0) throw new Error(`${field} must contain at least one finite number`);
+  return values;
+}
+
+function sortNumbers(values: number[]) {
+  return [...values].sort((a, b) => a - b);
+}
+
+function quantileFromSorted(sorted: number[], q: number) {
+  if (sorted.length === 0) throw new Error("quantile requires at least one value");
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  if (lower === upper) return sorted[lower];
+  const weight = pos - lower;
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
+export function describeValues(raw: unknown): DescribeStats {
+  const values = normalizeNumberArray(raw, "data");
+  const sorted = sortNumbers(values);
+  const count = sorted.length;
+  const sum = sorted.reduce((acc, item) => acc + item, 0);
+  const mean = sum / count;
+  const variance = count > 1 ? sorted.reduce((acc, item) => acc + (item - mean) ** 2, 0) / (count - 1) : 0;
+  const std = Math.sqrt(variance);
+  const q1 = quantileFromSorted(sorted, 0.25);
+  const median = quantileFromSorted(sorted, 0.5);
+  const q3 = quantileFromSorted(sorted, 0.75);
+  return {
+    count,
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+    mean,
+    median,
+    std,
+    variance,
+    q1,
+    q3,
+    iqr: q3 - q1,
+    sum,
+  };
+}
+
+function buildHistogramBins(data: number[], binsInput: unknown, labelsInput?: unknown): HistogramBin[] {
+  const sorted = sortNumbers(data);
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const bins = clamp(parseInteger(binsInput, Math.ceil(Math.sqrt(sorted.length))), 1, Math.min(64, Math.max(1, sorted.length)));
+  if (min === max) {
+    return [{ x0: min - 0.5, x1: max + 0.5, count: sorted.length, label: typeof labelsInput === "string" ? labelsInput : `${min}` }];
+  }
+  const width = (max - min) / bins;
+  const counts = Array.from({ length: bins }, () => 0);
+  sorted.forEach((value) => {
+    const idx = Math.min(bins - 1, Math.floor((value - min) / width));
+    counts[idx] += 1;
+  });
+  return counts.map((count, index) => {
+    const x0 = min + index * width;
+    const x1 = index === bins - 1 ? max : min + (index + 1) * width;
+    return { x0, x1, count, label: `${x0.toFixed(2)}–${x1.toFixed(2)}` };
+  });
+}
+
+function buildBoxGroup(record: Record<string, unknown>, index: number): BoxPlotGroup {
+  const values = normalizeNumberArray(record.data, `series[${index}].data`);
+  const stats = describeValues(values);
+  const lowerFence = stats.q1 - 1.5 * stats.iqr;
+  const upperFence = stats.q3 + 1.5 * stats.iqr;
+  const inliers = values.filter((value) => value >= lowerFence && value <= upperFence);
+  const inlierSorted = sortNumbers(inliers.length > 0 ? inliers : values);
+  const outliers = sortNumbers(values.filter((value) => value < lowerFence || value > upperFence));
+  return {
+    name: safeLabel(record.name, `Group ${index + 1}`),
+    color: typeof record.color === "string" && record.color ? record.color : DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+    values,
+    min: Math.min(...values),
+    q1: stats.q1,
+    median: stats.median,
+    q3: stats.q3,
+    max: Math.max(...values),
+    lowerWhisker: inlierSorted[0],
+    upperWhisker: inlierSorted[inlierSorted.length - 1],
+    outliers,
+  };
+}
+
+function pearsonCorrelation(a: number[], b: number[]) {
+  if (a.length !== b.length || a.length < 2) throw new Error("correlation requires arrays with the same length >= 2");
+  const meanA = a.reduce((acc, item) => acc + item, 0) / a.length;
+  const meanB = b.reduce((acc, item) => acc + item, 0) / b.length;
+  let cov = 0;
+  let varA = 0;
+  let varB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const da = a[i] - meanA;
+    const db = b[i] - meanB;
+    cov += da * db;
+    varA += da * da;
+    varB += db * db;
+  }
+  if (varA === 0 || varB === 0) return 0;
+  return cov / Math.sqrt(varA * varB);
+}
+
+export function analyzeData(args: Record<string, unknown>) {
+  const op = String(args.op || args.kind || args.analysis || "describe");
+  if (op === "describe") {
+    return { ok: true, op, stats: describeValues(args.data) };
+  }
+  if (op === "corr") {
+    const rawSeries = ensureArray<unknown>(args.series);
+    if (rawSeries.length < 2) throw new Error("corr requires at least 2 series");
+    const normalized = rawSeries.map((item, index) => {
+      const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+      return {
+        name: safeLabel(record.name, `Series ${index + 1}`),
+        data: normalizeNumberArray(record.data ?? item, `series[${index}]`),
+      };
+    });
+    const size = normalized[0].data.length;
+    if (normalized.some((item) => item.data.length !== size)) throw new Error("all corr series must have the same length");
+    return {
+      ok: true,
+      op,
+      labels: normalized.map((item) => item.name),
+      matrix: normalized.map((left) => normalized.map((right) => pearsonCorrelation(left.data, right.data))),
+    };
+  }
+  if (op === "groupby") {
+    const values = normalizeNumberArray(args.data, "data");
+    const groups = ensureArray<unknown>(args.groups).map((item) => String(item));
+    if (groups.length !== values.length) throw new Error("groupby requires groups length to match data length");
+    const bucket = new Map<string, number[]>();
+    groups.forEach((group, index) => {
+      const list = bucket.get(group) || [];
+      list.push(values[index]);
+      bucket.set(group, list);
+    });
+    return {
+      ok: true,
+      op,
+      groups: Array.from(bucket.entries()).map(([group, groupValues]) => ({
+        group,
+        stats: describeValues(groupValues),
+      })),
+    };
+  }
+  throw new Error("analysis op must be describe, corr, or groupby");
+}
+
 export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
   const expr = String(args.expr || "").trim();
   const xMin = parseNumber(args.x_min, -10);
@@ -253,6 +464,7 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     grid: args.grid === undefined ? true : Boolean(args.grid),
     series,
     annotations,
+    mode: "xy",
     ...calculateBounds(series, annotations),
   };
 }
@@ -275,6 +487,7 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
     grid: args.grid === undefined ? true : Boolean(args.grid),
     series,
     annotations,
+    mode: "xy",
     ...calculateBounds(series, annotations),
   };
 }
@@ -284,6 +497,89 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
   if (input.length === 0) throw new Error("series is required");
   if (input.length > MAX_SERIES) throw new Error(`too many series (max ${MAX_SERIES})`);
   const annotations = normalizeAnnotations(args.annotations);
+
+  const first = (input[0] && typeof input[0] === "object") ? input[0] as Record<string, unknown> : {};
+  const firstType = String(first.type || "line");
+
+  if (firstType === "hist") {
+    const data = normalizeNumberArray(first.data, "series[0].data");
+    const bins = buildHistogramBins(data, first.bins);
+    const points = bins.map((bin, index) => ({ x: index, y: bin.count }));
+    const series: NormalizedSeries[] = [{
+      name: safeLabel(first.name, "Histogram"),
+      type: "line+scatter",
+      color: typeof first.color === "string" && first.color ? first.color : DEFAULT_PALETTE[0],
+      points,
+    }];
+    return {
+      title: safeTitle(args.title, "Histogram"),
+      xlabel: safeLabel(args.xlabel, "Bin"),
+      ylabel: safeLabel(args.ylabel, "Count"),
+      grid: args.grid === undefined ? true : Boolean(args.grid),
+      series,
+      annotations,
+      categories: bins.map((bin) => bin.label),
+      mode: "hist",
+      histogram: {
+        bins,
+        color: series[0].color,
+        seriesName: series[0].name,
+      },
+      xMin: -0.5,
+      xMax: bins.length - 0.5,
+      yMin: 0,
+      yMax: Math.max(1, ...bins.map((bin) => bin.count)) * 1.1,
+    };
+  }
+
+  if (firstType === "box") {
+    const groups = input.map((item, index) => buildBoxGroup((item && typeof item === "object") ? item as Record<string, unknown> : {}, index));
+    const yValues = groups.flatMap((group) => [group.lowerWhisker, group.q1, group.median, group.q3, group.upperWhisker, ...group.outliers]);
+    return {
+      title: safeTitle(args.title, "Box Plot"),
+      xlabel: safeLabel(args.xlabel, "Group"),
+      ylabel: safeLabel(args.ylabel, "Value"),
+      grid: args.grid === undefined ? true : Boolean(args.grid),
+      series: [],
+      annotations,
+      categories: groups.map((group) => group.name),
+      mode: "box",
+      boxPlot: { groups },
+      xMin: -0.5,
+      xMax: groups.length - 0.5,
+      yMin: Math.min(...yValues) - Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1),
+      yMax: Math.max(...yValues) + Math.max(1e-6, (Math.max(...yValues) - Math.min(...yValues)) * 0.1),
+    };
+  }
+
+  if (firstType === "pie") {
+    const labels = ensureArray<unknown>(first.labels).map((item, index) => safeLabel(item, `Slice ${index + 1}`));
+    const values = ensureArray<unknown>(first.values).map((item) => Number(item));
+    if (labels.length === 0 || labels.length !== values.length) throw new Error("pie series requires labels and values with matching lengths");
+    if (values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error("pie values must be finite non-negative numbers");
+    const slices = values.map((value, index) => ({
+      label: labels[index],
+      value,
+      color: DEFAULT_PALETTE[index % DEFAULT_PALETTE.length],
+    }));
+    const total = values.reduce((acc, value) => acc + value, 0);
+    if (total <= 0) throw new Error("pie total must be positive");
+    return {
+      title: safeTitle(args.title, "Pie Chart"),
+      xlabel: safeLabel(args.xlabel, ""),
+      ylabel: safeLabel(args.ylabel, ""),
+      grid: false,
+      series: [],
+      annotations: [],
+      mode: "pie",
+      pie: { slices, total },
+      xMin: -1,
+      xMax: 1,
+      yMin: -1,
+      yMax: 1,
+    };
+  }
+
   const series = input.map((item, index) => {
     const record = (item && typeof item === "object") ? item as Record<string, unknown> : {};
     const type = record.type === "scatter" || record.type === "line+scatter" ? record.type : "line";
@@ -301,6 +597,7 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     grid: args.grid === undefined ? true : Boolean(args.grid),
     series,
     annotations,
+    mode: "xy",
     ...calculateBounds(series, annotations),
   };
 }
@@ -333,6 +630,7 @@ export function buildBarChart(args: Record<string, unknown>): PlotSpec {
     series,
     categories,
     barMode: true,
+    mode: "bar",
     xMin: -0.5,
     xMax: categories.length - 0.5,
     yMin: Math.min(0, bounds.yMin),

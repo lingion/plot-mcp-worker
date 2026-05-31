@@ -2,7 +2,7 @@ import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
-import { PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
+import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
 
 const SUPERSCRIPT_MAP: Record<string, string> = {
@@ -253,6 +253,168 @@ export function renderPlotSvg(spec: PlotSpec): string {
   <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${formulaText(spec.xlabel)}</text>
   <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
 </svg>`;
+}
+
+function renderHistogramBars(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
+  const hist = spec.histogram;
+  if (!hist) return "";
+  const count = hist.bins.length;
+  if (!count) return "";
+  const slotWidth = plotWidth / count;
+  const barWidth = Math.max(12, slotWidth * 0.82);
+  return hist.bins.map((bin, index) => {
+    const centerX = mapX(index, spec.xMin, spec.xMax, plotX, plotWidth);
+    const y = mapY(bin.count, spec.yMin, spec.yMax, plotY, plotHeight);
+    const baseY = mapY(0, spec.yMin, spec.yMax, plotY, plotHeight);
+    const top = Math.min(y, baseY);
+    const height = Math.max(1, Math.abs(baseY - y));
+    const label = formulaText(bin.label);
+    return `<g><rect x="${(centerX - barWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${height.toFixed(2)}" fill="${hist.color}" opacity="0.85" rx="4"/><text x="${centerX.toFixed(2)}" y="${plotY + plotHeight + 22}" font-size="11" text-anchor="middle" fill="#374151" transform="rotate(-35 ${centerX.toFixed(2)} ${plotY + plotHeight + 22})">${label}</text><text x="${centerX.toFixed(2)}" y="${top - 6}" font-size="13" text-anchor="middle" fill="#111827" font-weight="600">${bin.count}</text></g>`;
+  }).join("");
+}
+
+function renderBoxPlotSvg(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
+  const bp = spec.boxPlot;
+  if (!bp) return "";
+  const gridLines = 5;
+  const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+  const gridParts = spec.grid ? yTicks.map((tick) => {
+    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+    return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+  }).join("") : "";
+  const tickLabels = yTicks.map((tick) => {
+    const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+    return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(2)}</text>`;
+  }).join("");
+  const groupWidth = plotWidth / bp.groups.length;
+  const boxWidth = Math.min(80, groupWidth * 0.6);
+  const boxes = bp.groups.map((group, index) => {
+    const cx = plotX + (index + 0.5) * groupWidth;
+    const halfBox = boxWidth / 2;
+    const yMedian = mapY(group.median, spec.yMin, spec.yMax, plotY, plotHeight);
+    const yQ1 = mapY(group.q1, spec.yMin, spec.yMax, plotY, plotHeight);
+    const yQ3 = mapY(group.q3, spec.yMin, spec.yMax, plotY, plotHeight);
+    const yLW = mapY(group.lowerWhisker, spec.yMin, spec.yMax, plotY, plotHeight);
+    const yUW = mapY(group.upperWhisker, spec.yMin, spec.yMax, plotY, plotHeight);
+    const parts: string[] = [];
+    parts.push(`<line x1="${cx}" y1="${yLW}" x2="${cx}" y2="${yQ1}" stroke="${group.color}" stroke-width="2"/>`);
+    parts.push(`<line x1="${cx}" y1="${yQ3}" x2="${cx}" y2="${yUW}" stroke="${group.color}" stroke-width="2"/>`);
+    parts.push(`<line x1="${cx - halfBox * 0.5}" y1="${yLW}" x2="${cx + halfBox * 0.5}" y2="${yLW}" stroke="${group.color}" stroke-width="2"/>`);
+    parts.push(`<line x1="${cx - halfBox * 0.5}" y1="${yUW}" x2="${cx + halfBox * 0.5}" y2="${yUW}" stroke="${group.color}" stroke-width="2"/>`);
+    parts.push(`<rect x="${cx - halfBox}" y="${yQ3}" width="${boxWidth}" height="${Math.max(1, yQ1 - yQ3)}" fill="${group.color}" opacity="0.25" stroke="${group.color}" stroke-width="2" rx="3"/>`);
+    parts.push(`<line x1="${cx - halfBox}" y1="${yMedian}" x2="${cx + halfBox}" y2="${yMedian}" stroke="${group.color}" stroke-width="3"/>`);
+    group.outliers.forEach((outlier) => {
+      const yO = mapY(outlier, spec.yMin, spec.yMax, plotY, plotHeight);
+      parts.push(`<circle cx="${cx}" cy="${yO}" r="4" fill="none" stroke="${group.color}" stroke-width="1.5"/>`);
+    });
+    const catLabel = formulaText(spec.categories?.[index] || group.name);
+    parts.push(`<text x="${cx}" y="${plotY + plotHeight + 34}" font-size="16" text-anchor="middle" fill="#374151">${catLabel}</text>`);
+    return `<g>${parts.join("")}</g>`;
+  }).join("");
+  return `${gridParts}${tickLabels}${boxes}`;
+}
+
+function renderPieSvg(spec: PlotSpec): string {
+  const pie = spec.pie;
+  if (!pie) return "";
+  const width = DEFAULT_WIDTH;
+  const height = DEFAULT_HEIGHT;
+  const cx = width / 2;
+  const cy = height / 2 + 10;
+  const radius = Math.min(width, height) * 0.32;
+  const innerRadius = radius * 0.45;
+  let currentAngle = -Math.PI / 2;
+  const slices = pie.slices.map((slice, index) => {
+    const angle = (slice.value / pie.total) * 2 * Math.PI;
+    const startAngle = currentAngle;
+    const endAngle = currentAngle + angle;
+    currentAngle = endAngle;
+    const midAngle = (startAngle + endAngle) / 2;
+    const isLarge = angle > Math.PI ? 1 : 0;
+    const x1 = cx + radius * Math.cos(startAngle);
+    const y1 = cy + radius * Math.sin(startAngle);
+    const x2 = cx + radius * Math.cos(endAngle);
+    const y2 = cy + radius * Math.sin(endAngle);
+    const ix1 = cx + innerRadius * Math.cos(endAngle);
+    const iy1 = cy + innerRadius * Math.sin(endAngle);
+    const ix2 = cx + innerRadius * Math.cos(startAngle);
+    const iy2 = cy + innerRadius * Math.sin(startAngle);
+    const path = `M${x1.toFixed(2)},${y1.toFixed(2)} A${radius},${radius} 0 ${isLarge} 1 ${x2.toFixed(2)},${y2.toFixed(2)} L${ix1.toFixed(2)},${iy1.toFixed(2)} A${innerRadius},${innerRadius} 0 ${isLarge} 0 ${ix2.toFixed(2)},${iy2.toFixed(2)} Z`;
+    const labelR = radius + 28;
+    const lx = cx + labelR * Math.cos(midAngle);
+    const ly = cy + labelR * Math.sin(midAngle);
+    const pct = ((slice.value / pie.total) * 100).toFixed(1);
+    const label = formulaText(slice.label);
+    return `<g><path d="${path}" fill="${slice.color}" stroke="#ffffff" stroke-width="2.5" opacity="0.9"/><text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" font-size="15" text-anchor="middle" fill="#111827" font-weight="600">${label} (${pct}%)</text></g>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
+  <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
+  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
+  ${slices}
+</svg>`;
+}
+
+export function renderSpecToSvg(spec: PlotSpec): string {
+  const mode = spec.mode || (spec.barMode ? "bar" : "xy");
+  if (mode === "pie") return renderPieSvg(spec);
+
+  const width = DEFAULT_WIDTH;
+  const height = DEFAULT_HEIGHT;
+  const plotX = 110;
+  const plotY = 110;
+  const plotWidth = width - 230;
+  const plotHeight = height - 220;
+  const gridLines = 5;
+
+  if (mode === "box") {
+    const bpSvg = renderBoxPlotSvg(spec, plotX, plotY, plotWidth, plotHeight);
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
+  <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
+  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
+  <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
+  ${bpSvg}
+  <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${formulaText(spec.xlabel)}</text>
+  <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
+</svg>`;
+  }
+
+  if (mode === "hist") {
+    const xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+    const yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+    const grid = spec.grid ? [
+      ...yTicks.map((tick) => {
+        const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+        return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+      })
+    ].join("") : "";
+    const yTickLabels = yTicks.map((tick) => {
+      const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight);
+      return `<text x="${plotX - 14}" y="${y + 6}" font-size="16" text-anchor="end" fill="#374151">${tick.toFixed(0)}</text>`;
+    }).join("");
+    const histBars = renderHistogramBars(spec, plotX, plotY, plotWidth, plotHeight);
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <style>text { font-family: ${DEFAULT_FONT_FAMILY}; }</style>
+  <rect width="100%" height="100%" fill="${DEFAULT_BG}" />
+  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#111827">${formulaText(spec.title)}</text>
+  <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5"/>
+  ${grid}
+  <line x1="${plotX}" y1="${plotY + plotHeight}" x2="${plotX + plotWidth}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
+  <line x1="${plotX}" y1="${plotY}" x2="${plotX}" y2="${plotY + plotHeight}" stroke="${DEFAULT_AXIS}" stroke-width="2"/>
+  ${yTickLabels}
+  ${histBars}
+  <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="20" fill="#111827">${formulaText(spec.xlabel)}</text>
+  <text x="30" y="${height / 2}" text-anchor="middle" font-size="20" fill="#111827" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
+</svg>`;
+  }
+
+  return renderPlotSvg(spec);
 }
 
 export async function renderPngBase64(svg: string, env: Env): Promise<string> {
