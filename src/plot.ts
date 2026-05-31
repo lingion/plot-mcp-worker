@@ -69,6 +69,10 @@ function warn(msg: string, warnings: string[]): void {
   warnings.push(msg);
 }
 
+function warnTransform(type: TransformWarning["type"], message: string, detail: Record<string, unknown>, warnings: TransformWarning[]): void {
+  warnings.push({ type, message, detail });
+}
+
 export function applySeriesTransforms(
   series: NormalizedSeries,
   warnings: string[]
@@ -85,20 +89,24 @@ export function applySeriesTransformsWithTrace(
   series: NormalizedSeries,
   warnings: string[]
 ): { series: NormalizedSeries; stages: TransformStage[] } {
+  // Collect plain string warnings for internal use (applyOneTransform uses string[])
+  const _warnings: string[] = [];
   const stages: TransformStage[] = [];
   let s = series;
-  const inputCount = s.points.length;
-  stages.push({ name: "raw", inputCount, outputCount: inputCount });
+  const N = s.points.length;
+  stages.push({ name: "raw", input: N, output: N });
   if (!s.transforms || s.transforms.length === 0) return { series: s, stages };
 
   for (const t of s.transforms) {
     const before = s.points.length;
-    s = applyOneTransform(s, t, warnings);
+    s = applyOneTransform(s, t, _warnings);
     const after = s.points.length;
     stages.push({
       name: transformStageName(t),
-      inputCount: before,
-      outputCount: after,
+      method: t.method ?? t.window ? String(t.window ?? "") : undefined,
+      input: before,
+      output: after,
+      detail: buildStageDetail(t),
     });
   }
   return { series: s, stages };
@@ -106,29 +114,51 @@ export function applySeriesTransformsWithTrace(
 
 function transformStageName(t: TransformSpec): string {
   switch (t.type) {
-    case "normalize": return `normalize(${t.method ?? "minmax"}${t.target ? "," + t.target : ""})`;
-    case "smooth":    return `smooth(window=${t.window ?? 3})`;
-    case "filter":    return `filter(${t.target ?? "y"}${t.op}${t.value})`;
-    case "rolling_average": return `rolling(window=${t.window ?? 3})`;
-    case "downsample": return `downsample(${t.method ?? "uniform"},max=${t.maxPoints})`;
+    case "normalize": return "normalize";
+    case "smooth":    return "smooth";
+    case "filter":    return "filter";
+    case "rolling_average": return "rolling_average";
+    case "downsample": return "downsample";
     default: return "unknown";
+  }
+}
+
+function buildStageDetail(t: TransformSpec): Record<string, unknown> {
+  switch (t.type) {
+    case "normalize": return { method: t.method ?? "minmax", target: t.target ?? "y" };
+    case "smooth":    return { window: t.window ?? 3 };
+    case "filter":    return { target: t.target ?? "y", op: t.op, value: t.value };
+    case "rolling_average": return { window: t.window ?? 3 };
+    case "downsample": return { method: t.method ?? "uniform", maxPoints: t.maxPoints };
+    default: return {};
   }
 }
 
 function collectSeriesTransforms(
   series: NormalizedSeries[],
-  warnings: string[],
+  warnings: TransformWarning[],
   trace: boolean
 ): { transformedSeries: NormalizedSeries[]; allStages: TransformStage[] } {
+  const strWarnings: string[] = [];
   if (!trace) {
-    return { transformedSeries: series.map(s => applySeriesTransforms(s, warnings)), allStages: [] };
+    const transformedSeries = series.map(s => applySeriesTransforms(s, strWarnings));
+    // Bridge string warnings → TransformWarning[]
+    for (const msg of strWarnings) {
+      warnings.push({ type: "transform", message: msg });
+    }
+    return { transformedSeries, allStages: [] };
   }
   const transformedSeries: NormalizedSeries[] = [];
   const allStages: TransformStage[] = [];
   for (const s of series) {
-    const { series: ts, stages } = applySeriesTransformsWithTrace(s, warnings);
+    const local: string[] = [];
+    const { series: ts, stages } = applySeriesTransformsWithTrace(s, local);
     transformedSeries.push(ts);
     if (stages.length > 1) allStages.push(...stages);
+    // Merge collected string warnings into TransformWarning[]
+    for (const msg of local) {
+      warnings.push({ type: "transform", message: msg });
+    }
   }
   return { transformedSeries, allStages };
 }
@@ -158,7 +188,7 @@ function applyNormalize(s: NormalizedSeries, t: NormalizeTransform, warnings: st
     return s;
   }
   if (s.errorExt !== undefined || s.error) {
-    warn(`normalize: not supported when series has error bars; skipped.`, warnings);
+    warn(`normalize skipped: not supported when series has error bars`, warnings);
     return s;
   }
   const target = t.target ?? "y";
@@ -217,7 +247,7 @@ function applyRollingAverage(s: NormalizedSeries, t: RollingAverageTransform, wa
 
 function applyRollingAverageCore(s: NormalizedSeries, window: number, target: string, warnings: string[]): NormalizedSeries {
   if (window < 2) {
-    warn(`rolling_average: window < 2 is a no-op; returning unchanged.`, warnings);
+    warn(`rolling_average skipped: window < 2 is a no-op`, warnings);
     return s;
   }
   const pts = s.points.map(p => ({ x: p.x, y: p.y }));
@@ -268,7 +298,7 @@ function applyFilter(s: NormalizedSeries, t: FilterTransform, warnings: string[]
     }
   });
   if (pts.length === 0) {
-    warn(`filter: result is empty; keeping all points.`, warnings);
+    warn(`filter result is empty; keeping all points`, warnings);
     return s;
   }
   // Sync errors with filtered points
@@ -276,7 +306,7 @@ function applyFilter(s: NormalizedSeries, t: FilterTransform, warnings: string[]
   if (error) {
     // Rebuild error array to match filtered points by index
     // Since we filter by condition, we can't easily sync — just clear error
-    warn(`filter: error bars cleared since x/y alignment changed; kept errorExt if asymmetric.`, warnings);
+    warn(`filter: error bars cleared since x/y alignment changed`, warnings);
   }
   return { ...s, points: pts, error: undefined };
 }
@@ -286,7 +316,7 @@ function applyFilter(s: NormalizedSeries, t: FilterTransform, warnings: string[]
 function applyDownsample(s: NormalizedSeries, t: DownsampleTransform, warnings: string[]): NormalizedSeries {
   const maxPoints = t.maxPoints;
   if (!Number.isFinite(maxPoints) || maxPoints < 2) {
-    warn(`downsample: maxPoints must be >= 2; no-op.`, warnings);
+    warn(`downsample skipped: maxPoints must be >= 2`, warnings);
     return s;
   }
   if (s.points.length <= maxPoints) return s;
@@ -406,15 +436,25 @@ export interface TransformWarnings {
   warnings: string[];
 }
 
+export interface TransformWarning {
+  type: "transform" | "performance" | "scale";
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface TransformStage {
   name: string;
-  inputCount: number;
-  outputCount: number;
+  method?: string;      // e.g. "minmax", "zscore", "uniform"
+  input: number;        // input point count
+  output: number;       // output point count
+  detail?: Record<string, unknown>;  // method-specific params
 }
 
 export interface TransformDebug {
   stages: TransformStage[];
 }
+
+export type TransformPolicy = "strict" | "best-effort";
 
 export interface BoxPlotGroup {
   name: string;
@@ -471,8 +511,9 @@ export interface PlotSpec {
     slices: PieSlice[];
     total: number;
   };
-  warnings?: string[];  // non-fatal warnings from transforms or rendering
+  warnings?: TransformWarning[];  // non-fatal structured warnings
   debug?: TransformDebug;  // transform pipeline trace (only when debug:true in request)
+  transform_policy?: TransformPolicy;  // "strict" | "best-effort" (default)
 }
 
 export interface DescribeStats {
@@ -1106,8 +1147,17 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
   const yScale = args.y_scale === "log" ? "log" as AxisScale : "linear" as AxisScale;
 
   // Apply transforms to each series and collect warnings
-  const warnings: string[] = [];
+  const warnings: TransformWarning[] = [];
   const debug = (args.debug === true);
+
+  // P4: large dataset guard
+  const totalRawPoints = series.reduce((sum, s) => sum + (s.points?.length ?? 0), 0);
+  const LARGE_DATASET = 5000;
+  const hasDownsample = series.some(s => Array.isArray(s.transforms) && s.transforms.some((t: any) => t.type === "downsample"));
+  if (totalRawPoints > LARGE_DATASET && !hasDownsample) {
+    warnings.push({ type: "performance", message: "large dataset without downsampling may impact rendering", detail: { points: totalRawPoints } });
+  }
+
   const { transformedSeries, allStages } = collectSeriesTransforms(series, warnings, debug);
   const transformedSpec: PlotSpec = {
     title: safeTitle(args.title, "Series Plot"),
@@ -1122,6 +1172,7 @@ export function buildSeriesPlot(args: Record<string, unknown>): PlotSpec {
     ...calculateBounds(transformedSeries, annotations, barStyle, yScale),
     warnings: warnings.length > 0 ? warnings : undefined,
     debug: debug && allStages.length > 0 ? { stages: allStages } : undefined,
+    transform_policy: (args.transform_policy === "strict" || args.transform_policy === "best-effort") ? args.transform_policy : undefined,
   };
   return transformedSpec;
 }

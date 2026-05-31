@@ -2253,6 +2253,7 @@ function normalizePayload(args: Record<string, unknown>, path: string): Record<s
     bar_style: args.bar_style,
     categories: args.categories,
     debug: args.debug,
+    transform_policy: args.transform_policy,
   };
 }
 
@@ -2352,16 +2353,20 @@ async function pngLinkPayload(args: Record<string, unknown>, path: string, origi
   const payload = normalizePayload(args, path);
   const spec = buildSpecFromPayload(payload);
   const base = await buildPlotLinkData(payload, origin, env);
-  // Collect all warnings: payload-level + transform-level from spec
-  const transformWarnings: string[] = (spec as any).warnings ?? [];
-  const payloadWarnings = collectPayloadWarnings(payload);
+  // Collect all warnings: transform-level (structured) + payload-level (strings → structured)
+  const transformWarnings = (spec as any)?.warnings ?? [];
+  const payloadWarnings = collectPayloadWarnings(payload).map((msg: string) => ({ type: "payload" as const, message: msg }));
   const allWarnings = [...payloadWarnings, ...transformWarnings];
   // Attach transform debug trace if available (only when debug:true in args)
   const dbg = (spec as any)?.debug;
+  const result: Record<string, unknown> = { ...base, warnings: allWarnings.length > 0 ? allWarnings : undefined };
   if (args.debug === true && dbg && Array.isArray(dbg.stages) && dbg.stages.length > 0) {
-    return { ...base, warnings: allWarnings.length > 0 ? allWarnings : undefined, debug: dbg };
+    result.debug = dbg;
   }
-  return { ...base, warnings: allWarnings.length > 0 ? allWarnings : undefined };
+  if ((spec as any)?.transform_policy) {
+    result.transform_policy = (spec as any).transform_policy;
+  }
+  return result;
 }
 
 async function resolveShortLink(env: Env, token: string) {
