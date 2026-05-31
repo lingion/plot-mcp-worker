@@ -33,16 +33,16 @@ export const DEFAULT_WIDTH = 1500;
 export const DEFAULT_HEIGHT = 750;
 export const DEFAULT_FONT_FAMILY = "sans-serif";
 export const DEFAULT_FONT_SIZE = 20;
-export const DEFAULT_BG = "transparent";
+export const DEFAULT_BG = "safe-dark";
 export const DEFAULT_AXIS = "#111827";
 export const DEFAULT_GRID = "rgba(128,128,128,0.15)";
 export const DEFAULT_PALETTE = [
-  "#2563eb",
-  "#dc2626",
-  "#16a34a",
-  "#9333ea",
-  "#ea580c",
-  "#0891b2",
-  "#db2777",
-  "#4f46e5"
+  "#60a5fa",
+  "#f87171",
+  "#34d399",
+  "#fbbf24",
+  "#a78bfa",
+  "#22d3ee",
+  "#fb923c",
+  "#f472b6"
 ] as const;
