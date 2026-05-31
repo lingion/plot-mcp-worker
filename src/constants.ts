@@ -35,7 +35,7 @@ export const DEFAULT_FONT_FAMILY = "sans-serif";
 export const DEFAULT_FONT_SIZE = 20;
 export const DEFAULT_BG = "#ffffff";
 export const DEFAULT_AXIS = "#111827";
-export const DEFAULT_GRID = "#d1d5db";
+export const DEFAULT_GRID = "#e5e7eb";
 export const DEFAULT_PALETTE = [
   "#2563eb",
   "#dc2626",
