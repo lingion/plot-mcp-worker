@@ -397,6 +397,23 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const plotY = 110;
   const plotWidth = width - 230;
   const plotHeight = height - 220;
+
+  // Equal aspect: expand domain so pxPerX === pxPerY (never crop data)
+  if (spec.aspect === "equal") {
+    const xRange = (spec.xMax - spec.xMin) || 1;
+    const yRange = (spec.yMax - spec.yMin) || 1;
+    const pxPerX = plotWidth / xRange;
+    const pxPerY = plotHeight / yRange;
+    if (pxPerX > pxPerY) {
+      const targetXRange = plotWidth / pxPerY;
+      const xMid = (spec.xMin + spec.xMax) / 2;
+      spec = { ...spec, xMin: xMid - targetXRange / 2, xMax: xMid + targetXRange / 2 };
+    } else if (pxPerY > pxPerX) {
+      const targetYRange = plotHeight / pxPerX;
+      const yMid = (spec.yMin + spec.yMax) / 2;
+      spec = { ...spec, yMin: yMid - targetYRange / 2, yMax: yMid + targetYRange / 2 };
+    }
+  }
   const gridLines = 5;
   // Pi-aware tick generation
   let xTicks: number[];
