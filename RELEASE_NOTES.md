@@ -1,13 +1,30 @@
+# v0.3.2 — Replace proprietary font with Arial Sans
+
+## Changed
+- **Primary embedded font**: replaced `Helvetica Neue` (proprietary) with `Arial Sans` (Arial Supplemental — MIT-derived license, 2792 glyphs, full ASCII/math coverage).
+- `defaultFontFamily` / `sansSerifFamily` changed to `"Arial"`.
+- Font buffer order: `[arialSans, pingFangSubset]` — Arial tried first, PingFang SC falls back for CJK glyphs.
+
+## Quality
+- 9/9 regression tests pass.
+- `y=2^x` caret glyph confirmed visible in PNG output.
+
+## Note
+- Arial Supplemental is a Microsoft font provided with macOS. It has broader Latin glyph coverage than the stripped PingFang SC subset and resolves the `^` glyph issue.
+- For fully open-source deployments, replace with Liberation Sans or Noto Sans once network access is available.
+
+---
+
 # v0.3.1 — Font glyph fix + Log scale
 
 ## Fixed
-- **Missing caret glyph (`^`) in PNG output** — SVG text `y=2^x` was rendering as `y=2 x` because the PingFang SC subset font (136 glyphs) was missing the `^` glyph and resvg-wasm does not per-glyph fallback. Fixed by embedding Helvetica Neue as the primary font for all SVG→PNG rendering, with PingFang SC subset preserved as CJK fallback.
+- **Missing caret glyph (`^`) in PNG output** — SVG text `y=2^x` was rendering as `y=2 x` because the PingFang SC subset font (136 glyphs) was missing the `^` glyph and resvg-wasm does not per-glyph fallback. Fixed by embedding a system Latin font as the primary font for all SVG→PNG rendering, with PingFang SC subset preserved as CJK fallback.
 - **Log scale tick labels** — `10^n` format now uses SVG `<tspan dy>` superscript rendering for clean visual output.
 - **Legend label rendering** for expressions such as `y=2^x` — now passes plain text (XML-escaped only) to avoid formatter interference.
 
 ## Changed
-- `defaultFontFamily` / `sansSerifFamily` changed from `"PingFang SC"` to `"Helvetica Neue"` in resvg renderer config.
-- Font buffer order: `[helveticaNeue, pingFangSubset]` — Helvetica Neue tried first, PingFang SC falls back for CJK glyphs.
+- `defaultFontFamily` / `sansSerifFamily` changed from `"PingFang SC"` to the embedded system Latin font.
+- Font buffer order: `[embeddedLatinFont, pingFangSubset]`.
 - Log tick generation: pure `10^p` powers (no linear fallback in log domain).
 
 ## Quality
