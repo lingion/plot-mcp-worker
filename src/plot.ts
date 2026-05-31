@@ -109,6 +109,8 @@ export function applySeriesTransformsWithTrace(
       detail: buildStageDetail(t),
     });
   }
+  // Merge internal string warnings into caller's warnings array
+  warnings.push(..._warnings);
   return { series: s, stages };
 }
 

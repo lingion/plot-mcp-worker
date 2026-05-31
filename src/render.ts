@@ -154,19 +154,27 @@ function formulaText(text: string): string {
 
 function makePath(points: PlotPoint[], spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
   if (points.length === 0) return "";
-  return points
-    .map((point, index) => {
-      const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
-      const yRaw = point.y;
-      // In log mode, skip non-positive points (log undefined) — breaks the path segment
-      if (spec.yScale === "log" && yRaw <= 0) return "";
-      const y = mapY(yRaw, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      // Skip NaN/Infinity points (break path), otherwise continuous line
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
-      return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .filter(Boolean)
-    .join(" ");
+  const yRange = spec.yMax - spec.yMin || 1;
+  const DISCONTINUITY_THRESHOLD = yRange * 0.5; // if |Δy_data| > 50% of visible y-range, break
+  const parts: string[] = [];
+  let lastValidIdx = -1;
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i];
+    const x = mapX(point.x, spec.xMin, spec.xMax, plotX, plotWidth);
+    const yRaw = point.y;
+    // In log mode, skip non-positive points (log undefined)
+    if (spec.yScale === "log" && yRaw <= 0) { lastValidIdx = -1; continue; }
+    const y = mapY(yRaw, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { lastValidIdx = -1; continue; }
+    // Discontinuity: large y jump in data space
+    if (lastValidIdx >= 0 && Math.abs(yRaw - points[lastValidIdx].y) > DISCONTINUITY_THRESHOLD) {
+      parts.push(`M${x.toFixed(2)},${y.toFixed(2)}`);
+    } else {
+      parts.push(`${lastValidIdx < 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    lastValidIdx = i;
+  }
+  return parts.join(" ");
 }
 
 function plainLegendLabel(text: string): string {
