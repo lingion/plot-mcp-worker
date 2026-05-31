@@ -1,7 +1,7 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
-import helveticaNeue from "./HelveticaNeue";
+import arialSans from "./ArialSans";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
 import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
@@ -596,14 +596,14 @@ export function renderSpecToSvg(spec: PlotSpec): string {
 
 export async function renderPngBase64(svg: string, env: Env): Promise<string> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(helveticaNeue), new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: DEFAULT_BG,
     font: {
       fontBuffers,
-      defaultFontFamily: "Helvetica Neue",
-      sansSerifFamily: "Helvetica Neue",
+      defaultFontFamily: "Arial",
+      sansSerifFamily: "Arial",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
@@ -614,14 +614,14 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
 
 export async function renderPngResponse(svg: string, env: Env): Promise<Response> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(helveticaNeue), new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: DEFAULT_BG,
     font: {
       fontBuffers,
-      defaultFontFamily: "Helvetica Neue",
-      sansSerifFamily: "Helvetica Neue",
+      defaultFontFamily: "Arial",
+      sansSerifFamily: "Arial",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
