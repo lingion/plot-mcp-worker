@@ -73,14 +73,16 @@ let fontCache: Uint8Array[] | null = null;
 async function loadFonts(env: Env): Promise<Uint8Array[]> {
   if (fontCache) return fontCache;
   const kv = env.SHORT_LINKS;
-  const [arialBuf, heitiBuf] = await Promise.all([
-    kv.get("font:arial-sans", "arrayBuffer"),
-    kv.get("font:heiti-sc-gb2312", "arrayBuffer"),
-  ]);
-  if (!arialBuf || !heitiBuf) {
-    throw new Error("Fonts not found in KV — upload font:arial-sans and font:heiti-sc-gb2312");
+  const heitiBuf = await kv.get("font:heiti-sc-gb2312", "arrayBuffer");
+  const arialBuf = await kv.get("font:arial-sans", "arrayBuffer");
+  const fonts: Uint8Array[] = [];
+  if (heitiBuf) fonts.push(new Uint8Array(heitiBuf));
+  if (arialBuf) fonts.push(new Uint8Array(arialBuf));
+  if (fonts.length === 0) {
+    throw new Error(`No fonts loaded from KV (heiti=${heitiBuf ? heitiBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'})`);
   }
-  fontCache = [new Uint8Array(arialBuf), new Uint8Array(heitiBuf)];
+  console.log(`Fonts loaded: heiti=${heitiBuf ? heitiBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'}, total=${fonts.length}`);
+  fontCache = fonts;
   return fontCache;
 }
 
@@ -995,8 +997,9 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
     background: "transparent",
     font: {
       fontBuffers,
-      defaultFontFamily: "Arial",
-      sansSerifFamily: "Arial",
+      defaultFontFamily: "Heiti SC",
+      sansSerifFamily: "Heiti SC",
+      serifFamily: "Heiti SC",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
@@ -1013,8 +1016,9 @@ export async function renderPngResponse(svg: string, env: Env): Promise<Response
     background: "transparent",
     font: {
       fontBuffers,
-      defaultFontFamily: "Arial",
-      sansSerifFamily: "Arial",
+      defaultFontFamily: "Heiti SC",
+      sansSerifFamily: "Heiti SC",
+      serifFamily: "Heiti SC",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
