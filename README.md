@@ -2,7 +2,7 @@
 
 [中文版](README_CN.md)
 
-A serverless chart rendering engine running on Cloudflare Workers. Exposes an MCP (Model Context Protocol) server that lets any AI agent generate publication-quality PNG/SVG charts from a single JSON call — no headless browser, no server, no storage bucket.
+A serverless chart rendering engine on Cloudflare Workers. Expose an MCP server that lets any AI agent generate PNG/SVG charts from a single JSON call — no headless browser, no server, no storage bucket.
 
 Charts are rendered as SVG, then rasterized to PNG via [resvg-wasm](https://github.com/nicbarker/resvg-js). CJK text (GB2312 + punctuation + math symbols, 7500+ glyphs) is handled through an opentype.js text-to-path pipeline that embeds font outlines directly into the SVG, ensuring correct rendering regardless of client fonts.
 
@@ -26,12 +26,11 @@ Add to your MCP client configuration (Claude Desktop, Cursor, etc.):
 }
 ```
 
-That's it. No API key needed. Your AI agent can now generate charts.
+No API key needed. Your AI agent can now generate charts.
 
 ### Use via HTTP
 
 ```bash
-# Generate a chart
 curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
   -H "Content-Type: application/json" \
   -d '{
@@ -44,7 +43,7 @@ curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
   }'
 ```
 
-Returns a JSON response with a `png_url`. The URL serves a pre-rendered PNG with a 5-minute cache.
+Returns JSON with a `png_url`. Pre-rendered PNG, 5-minute cache.
 
 ### Direct PNG/SVG URLs
 
@@ -57,60 +56,127 @@ Use `plot_png_link` or `plot` tool to get properly encoded URLs.
 
 ---
 
-## Self-Host (Deploy Your Own)
+## Recommended Tools
 
-### Prerequisites
+**Start here.** These four tools cover 95% of use cases:
 
-- [Node.js](https://nodejs.org/) 20+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm install -g wrangler`)
-- A [Cloudflare](https://dash.cloudflare.com/) account (free tier works)
-- Cloudflare Workers KV namespace (for font storage and short-link URLs)
+| Tool | When to use |
+|------|-------------|
+| **`plot`** / **`plot_png_link`** | Single function or expression — `sin(x)`, `exp(-x)*cos(x)`, etc. Supports annotations, custom ranges, layout presets. |
+| **`plot_multi`** | Multiple expressions overlaid — compare functions, show decompositions. |
+| **`plot_series`** | Data-driven charts — line, scatter, bar (grouped/stacked), histogram, box plot, pie. Accepts raw data arrays with optional error bars and transforms. |
+| **`multi_plot`** | Subplot grids — M×N layout of any chart types in one figure. |
 
-### Steps
+### Legacy / Specialized Tools
 
-```bash
-# 1. Clone
-git clone https://github.com/lingion/plot-mcp-worker.git
-cd plot-mcp-worker
+These remain supported for compatibility and niche workflows. New integrations should prefer the four tools above.
 
-# 2. Install dependencies
-npm install
+| Tool | Use case |
+|------|----------|
+| `plot_bar` | Quick bar chart shorthand (categories + values) |
+| `teaching` | Built-in math education templates (definite integral, derivative tangent, Fourier, projectile, etc.) |
+| `analysis` | Statistical summaries — describe, correlation, groupby |
+| `force_diagram_link` | Physics force diagrams |
+| `circuit_diagram_link` | Circuit schematics |
+| `venn_diagram_link` | Venn diagrams |
+| `c_memory_diagram_link` | C memory layout diagrams |
+| `plot_json` | Raw spec input (advanced) |
 
-# 3. Create KV namespace
-npx wrangler kv namespace create SHORT_LINKS
-# Note the `id` from the output
+---
 
-# 4. Update wrangler.toml with your KV namespace ID
-# Edit the `id` field under `[[kv_namespaces]]`
+## Smart Defaults
 
-# 5. Upload CJK font to KV (optional, for Chinese/Japanese/Korean support)
-# Subset a TTF font (e.g., Arial Unicode MS) to GB2312 + punctuation:
-#   pyftsubset --no-hinting --unicodes-file=your-unicode-list.txt ArialUnicode.ttf \
-#     --output-file=subset.ttf
-npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
-  --namespace-id YOUR_KV_ID --path subset.ttf --remote
+The engine does a lot before you touch any option:
 
-# Also upload a basic Latin font:
-npx wrangler kv key put "font:arial-sans" \
-  --namespace-id YOUR_KV_ID --path path/to/arial.ttf --remote
+### Axis Intelligence
+- **Nice ticks**: Step selection from 1, 2, 2.5, 5 × 10ⁿ — no ugly values like 0.72 or 1.2
+- **Auto π-mode**: Trig functions automatically get π-formatted x-axis (`-2π, -π, 0, π, 2π`)
+- **Trig y-special**: sin/cos gets `[-1, -0.5, 0, 0.5, 1]` instead of arbitrary decimals
+- **0-symmetric**: Math-style function plots default to symmetric y-axis around zero
+- **Log scale**: Set `y_scale: "log"` for logarithmic y-axis with proper tick formatting
 
-# 6. Deploy
-npx wrangler deploy
+### Discontinuity Handling
+- **Asymptote detection**: Sign-flip + large Δy triggers path break — no vertical spikes at asymptotes
+- **IQR bounds clamping**: Extreme values near asymptotes (e.g., tan(x) at ±π/2) are automatically clamped using interquartile range filtering, keeping the y-axis readable
+
+### Visual Design
+- **Dark theme by default**: `#0f172a` card, `#111827` plot area, `#334155` grid — publication-ready out of the box
+- **Legend outside plot area**: Right-side reserved, never overlaps data
+- **Canvas presets**: Math (1000×720) for functions, Report (1200×720) for data charts
+- **CJK support**: 7500+ glyphs (GB2312 + punctuation + math symbols) via text-to-path pipeline
+- **Color palette**: `#60a5fa, #f87171, #34d399, #fbbf24, #a78bfa, #22d3ee, #fb923c, #f472b6`
+
+### Annotations
+
+Three annotation types, placed in separate visual layers:
+
+```json
+"annotations": [
+  {"kind": "point", "x": 1.471, "y": 0.859, "label": "Peak", "color": "#fbbf24"},
+  {"kind": "area", "x_min": 0.8, "x_max": 2.2, "label": "Region", "color": "#60a5fa", "opacity": 0.12},
+  {"kind": "vertical_line", "x": 6.93, "label": "Half-life", "color": "#f87171"}
+]
 ```
 
-Your endpoint will be live at `https://<your-worker>.<your-subdomain>.workers.dev/mcp`.
+Layout: points → above-right of marker; areas → inside lower region; vertical lines → bottom of plot. Local collision avoidance is basic in the current version and will be improved.
 
-### Custom Domain (Optional)
+### Expression Syntax
 
-Add a route in `wrangler.toml`:
+Powered by [expr-eval](https://github.com/silentmatt/expr-eval):
 
-```toml
-[[routes]]
-pattern = "plot.yourdomain.com/*"
-zone_name = "yourdomain.com"
+- Functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `floor`, `ceil`, `round`
+- Constants: `pi`, `e`
+- Operators: `+`, `-`, `*`, `/`, `^` (power), `%` (mod)
+
+---
+
+## Observability & Safety
+
+The engine doesn't just draw — it explains what it did and warns when something might be wrong.
+
+### Debug Mode
+
+```json
+{"tool": "plot_series", "arguments": {
+  "debug": true,
+  "series": [{"type": "line", "name": "data", "points": [[1,2],[2,5],[3,3]]}]
+}}
 ```
 
-Then point a DNS record to your Worker.
+Returns a `debug` object with pipeline stages:
+
+```json
+{
+  "debug": {
+    "stages": [
+      {"name": "raw", "input": 3, "output": 3},
+      {"name": "downsample", "method": "minmax", "input": 3, "output": 3}
+    ]
+  }
+}
+```
+
+### Structured Warnings
+
+The engine emits warnings when it makes automatic decisions:
+
+```json
+{
+  "warnings": [
+    {"type": "transform", "message": "normalize skipped due to error bars"},
+    {"type": "bounds", "message": "y-range clamped via IQR outlier removal (42 of 400 points excluded)"}
+  ]
+}
+```
+
+### Transform Policy
+
+Control how aggressively the engine applies automatic transforms:
+
+```json
+"transformPolicy": "strict"       // fail on unsupported transforms
+"transformPolicy": "best-effort"  // skip silently (default)
+```
 
 ---
 
@@ -118,7 +184,7 @@ Then point a DNS record to your Worker.
 
 ### 1. Trigonometric Composition
 
-sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `[-1, -0.5, 0, 0.5, 1]`, auto legend outside plot area.
+sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks.
 
 ![Trigonometric Composition](docs/showcase/en/01_trig_composition.png)
 
@@ -135,7 +201,7 @@ sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `
 
 ### 2. Square Wave — Fourier Series Approximation
 
-Progressively adding odd harmonics to approximate a square wave. 4 series, auto π-axis, math preset.
+Progressively adding odd harmonics. 4 series, auto π-axis.
 
 ![Fourier Approximation](docs/showcase/en/02_fourier_approx.png)
 
@@ -150,9 +216,9 @@ Progressively adding odd harmonics to approximate a square wave. 4 series, auto 
 
 ---
 
-### 3. tan(x) — Discontinuity Detection
+### 3. tan(x) — Asymptote-Aware Rendering
 
-Automatic asymptote break detection — no spikes, no vertical lines connecting ±∞.
+Automatic discontinuity detection with IQR bounds clamping. No spikes, no vertical lines connecting ±∞. Y-range stays readable near asymptotes.
 
 ![tan(x) Discontinuity](docs/showcase/en/03_tan_discontinuity.png)
 
@@ -168,7 +234,7 @@ Automatic asymptote break detection — no spikes, no vertical lines connecting 
 
 ### 4. sinc(x) = sin(x)/x
 
-Classic signal processing function with removable singularity handling at x=0.
+Removable singularity handling at x=0.
 
 ![sinc Function](docs/showcase/en/04_sinc_function.png)
 
@@ -184,7 +250,7 @@ Classic signal processing function with removable singularity handling at x=0.
 
 ### 5. 1/(x²-1) — Rational Function with Asymptote Annotations
 
-Vertical asymptote markers at x = ±1. The engine renders pole gaps without artifact spikes.
+Vertical asymptote markers at x = ±1. Pole gaps rendered without artifact spikes.
 
 ![Rational Asymptotes](docs/showcase/en/05_rational_asymptotes.png)
 
@@ -251,9 +317,9 @@ Three Gaussians with different means and variances.
 
 ---
 
-### 9. Decaying Sine with Full Annotation Suite
+### 9. Decaying Sine with Annotations
 
-Area shading, point markers, vertical line, and text labels — all annotation types in one chart.
+Area shading, point markers, vertical line — all annotation types in one chart. Points placed at mathematically correct peak locations (derived from f'(x)=0). Annotation layout uses layered placement: points above-right, areas inside-lower, vertical lines at bottom.
 
 ![Annotated Peaks](docs/showcase/en/09_annotated_peaks.png)
 
@@ -276,7 +342,7 @@ Area shading, point markers, vertical line, and text labels — all annotation t
 
 ### 10. Multi-Series Business Chart with Error Bars
 
-Forecast vs Actual vs Target — symmetric error bars on scatter, clean legend outside plot area.
+Forecast vs Actual vs Target — symmetric error bars on scatter.
 
 ![Business Error Bars](docs/showcase/en/10_business_error_bars.png)
 
@@ -406,7 +472,7 @@ Training loss over 10 epochs — y-axis automatically switches to logarithmic ti
 
 ### 17. Scatter with Asymmetric Error Bars
 
-Experimental measurements where uncertainty is not symmetric — `error: { plus: [...], minus: [...] }`.
+Asymmetric uncertainty — `error: { plus: [...], minus: [...] }`.
 
 ![Scatter Asymmetric](docs/showcase/en/17_scatter_asymmetric.png)
 
@@ -442,7 +508,7 @@ Three views of the same noisy data: raw scatter, smoothed line (window=3), and m
 
 ### 19. 2×2 Subplot Grid
 
-Four different chart types in one figure — line, scatter, function — with shared legend outside the grid.
+Four different chart types in one figure — line, scatter, function.
 
 ![Subplot 2x2](docs/showcase/en/19_subplot_2x2.png)
 
@@ -477,55 +543,7 @@ Built-in teaching module: shaded integral region, formula, bounds.
 
 ---
 
-## Features
-
-### Chart Types
-
-| Type | Tool | Input |
-|------|------|-------|
-| **Function plot** | `plot_png_link` | Expression string (`"sin(x)"`, `"1/(x^2-1)"`) |
-| **Multi-function** | `plot_multi` | Array of expressions |
-| **Data series** | `plot_series` | Explicit `[[x,y], ...]` data points |
-| **Bar chart** | `plot_series` or `plot_bar` | Grouped or stacked bars |
-| **Histogram** | `plot_series` | Raw data array + bin count |
-| **Box plot** | `plot_series` | Raw data array per group |
-| **Pie chart** | `plot_series` | Labels + values |
-| **Subplot grid** | `multi_plot` | M×N grid of any chart types |
-| **Teaching templates** | `teaching` | Definite integrals, derivatives, Fourier, projectile motion, etc. |
-| **Diagrams** | `diagram` | Force diagrams, circuit diagrams, Venn diagrams |
-
-### Axis Engine
-
-- **Nice ticks**: Step selection from 1, 2, 2.5, 5 × 10ⁿ — no ugly values like 0.72 or 1.2
-- **Auto π-mode**: Trig functions automatically get π-formatted x-axis (`-2π, -π, 0, π, 2π`)
-- **Trig y-special**: sin/cos gets `[-1, -0.5, 0, 0.5, 1]` instead of arbitrary decimals
-- **0-symmetric**: Math-style function plots default to symmetric y-axis around zero
-- **Log scale**: Set `y_scale: "log"` for logarithmic y-axis
-- **Discontinuity detection**: Sign-flip + large Δy → path break, no vertical spikes at asymptotes
-
-### Annotations
-
-Add visual context to any chart:
-
-```json
-"annotations": [
-  {"kind": "vertical_line", "x": 3.14, "label": "π", "color": "#f87171"},
-  {"kind": "point", "x": 5.5, "y": 0.58, "label": "Peak", "color": "#fbbf24"},
-  {"kind": "area", "x_min": 4, "x_max": 7, "label": "Region", "color": "#60a5fa", "opacity": 0.15}
-]
-```
-
-### Error Bars
-
-Three formats supported:
-
-```json
-"error": [2, 3, 2, 1]                          // symmetric per-point
-"error": 5                                      // constant for all points
-"error": {"plus": [0.02,0.03], "minus": [0.01,0.02]}  // asymmetric
-```
-
-### Data Transforms
+## Data Transforms
 
 Pipeline transforms on data series:
 
@@ -538,22 +556,87 @@ Pipeline transforms on data series:
 ]
 ```
 
-### Visual Design
+Downsampling is automatic for large datasets (minmax algorithm preserves visual extrema).
 
-- **Dark theme by default**: `#0f172a` card background, `#111827` plot area, `#334155` grid
-- **Legend outside plot area**: Right-side reserved, never overlaps data
-- **Canvas presets**: Math (1000×720) for functions, Report (1200×720) for data charts
-- **CJK support**: 7500+ glyphs (GB2312 + punctuation + math symbols) via text-to-path pipeline
-- **Color palette**: `#60a5fa, #f87171, #34d399, #fbbf24, #a78bfa, #22d3ee, #fb923c, #f472b6`
+---
 
-### Expression Syntax
+## Error Bars
 
-Powered by [expr-eval](https://github.com/silentmatt/expr-eval):
+Three formats:
 
-- Functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `floor`, `ceil`, `round`
-- Constants: `pi`, `e`
-- Operators: `+`, `-`, `*`, `/`, `^` (power), `%` (mod)
-- Examples: `sin(x)`, `exp(-0.3*x)*cos(2*x)`, `1/(x^2-1)`, `abs(sin(x))*cos(x)`
+```json
+"error": [2, 3, 2, 1]                          // symmetric per-point
+"error": 5                                      // constant for all points
+"error": {"plus": [0.02,0.03], "minus": [0.01,0.02]}  // asymmetric
+```
+
+---
+
+## Current Strengths & Limits
+
+### What works well
+- Dark-theme defaults that look good without configuration
+- π-aware trig axes with automatic detection
+- Minmax downsampling that preserves visual extrema
+- Structured warnings and debug traces for observability
+- CJK text via path-based rendering (no client font dependency)
+- Asymptote-aware function plotting with IQR bounds clamping
+- Annotation system with three semantic types and layered placement
+
+### Current limits
+- Annotation local collision avoidance is basic — labels in the same region may overlap. Full layout engine planned for next release.
+- Symbolic tick marks beyond π (e.g., √2, e) are not yet auto-detected.
+- Function plot layout prioritizes readability over full symbolic analysis.
+- Some legacy tools (`plot_bar`, `plot_json`) remain for backward compatibility.
+
+---
+
+## Self-Host (Deploy Your Own)
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 20+
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm install -g wrangler`)
+- A [Cloudflare](https://dash.cloudflare.com/) account (free tier works)
+- Cloudflare Workers KV namespace (for font storage and short-link URLs)
+
+### Steps
+
+```bash
+# 1. Clone
+git clone https://github.com/lingion/plot-mcp-worker.git
+cd plot-mcp-worker
+
+# 2. Install dependencies
+npm install
+
+# 3. Create KV namespace
+npx wrangler kv namespace create SHORT_LINKS
+# Note the `id` from the output
+
+# 4. Update wrangler.toml with your KV namespace ID
+
+# 5. Upload CJK font to KV (optional, for Chinese/Japanese/Korean support)
+npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
+  --namespace-id YOUR_KV_ID --path subset.ttf --remote
+
+# Also upload a basic Latin font:
+npx wrangler kv key put "font:arial-sans" \
+  --namespace-id YOUR_KV_ID --path path/to/arial.ttf --remote
+
+# 6. Deploy
+npx wrangler deploy
+```
+
+### Custom Domain (Optional)
+
+Add a route in `wrangler.toml`:
+
+```toml
+[[routes]]
+pattern = "plot.yourdomain.com/*"
+zone_name = "yourdomain.com"
+```
 
 ---
 
@@ -600,19 +683,27 @@ No headless browser. No external storage. Everything runs in a single Cloudflare
 
 ## MCP Tools Reference
 
+### Recommended
+
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `plot` / `plot_png_link` | Single expression chart | `expr`, `title`, `x_min`, `x_max`, `annotations` |
 | `plot_multi` | Multiple expressions overlaid | `exprs[]`, `labels[]`, `title` |
-| `plot_series` | Data-driven charts | `series[]` with `type`, `points`, `color`, `error` |
-| `plot_bar` | Quick bar chart | `categories[]`, `values[]`, `title` |
+| `plot_series` | Data-driven charts | `series[]` with `type`, `points`, `color`, `error`, `transforms` |
 | `multi_plot` | Subplot grid | `rows`, `cols`, `plots[]` |
-| `teaching` | Math education templates | `topic`: `definite_integral`, `derivative_tangent`, `fourier_series`, `projectile`, `simple_harmonic`, `energy_conservation`, `rc_circuit`, `parabola` |
-| `analysis` | Statistical analysis | `action`: `describe`, `corr`, `groupby` |
-| `force_diagram_link` | Physics force diagrams | Bodies, connectors, surfaces |
-| `circuit_diagram_link` | Circuit schematics | Components, wires |
-| `venn_diagram_link` | Venn diagrams | Sets with labels and values |
-| `c_memory_diagram_link` | C memory layout | Variables, pointers, arrays |
+
+### Legacy / Specialized
+
+| Tool | Description |
+|------|-------------|
+| `plot_bar` | Quick bar chart (categories + values) |
+| `teaching` | Math education templates: `definite_integral`, `derivative_tangent`, `fourier_series`, `projectile`, `simple_harmonic`, `energy_conservation`, `rc_circuit`, `parabola` |
+| `analysis` | Statistical analysis: `describe`, `corr`, `groupby` |
+| `force_diagram_link` | Physics force diagrams |
+| `circuit_diagram_link` | Circuit schematics |
+| `venn_diagram_link` | Venn diagrams |
+| `c_memory_diagram_link` | C memory layout |
+| `plot_json` | Raw spec input (advanced) |
 
 ---
 
