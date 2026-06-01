@@ -2,7 +2,7 @@ import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
 import arialSans from "./ArialSans";
-import { normalizeErrorAt, MultiPlotCell, MultiPlotResult } from "./plot";
+import { normalizeErrorAt, MultiPlotCell, MultiPlotResult, resolveAxisPolicy, PlotIntent, ResolvedAxisPolicy } from "./plot";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
 import { HistogramBin, BoxPlotGroup, PieSlice, PlotAnnotation, PlotPoint, PlotSpec } from "./plot";
 import { escapeXml, toBase64 } from "./utils";
@@ -69,6 +69,48 @@ async function ensureResvgReady() {
   await wasmReady;
 }
 
+// ── Nice tick generation engine ──────────────────────────────────────────────
+
+const NICE_STEPS = [1, 2, 2.5, 5];
+
+function niceStep(rawStep: number): number {
+  if (rawStep <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const normalized = rawStep / magnitude;
+  let best = NICE_STEPS[0];
+  let bestDist = Math.abs(normalized - best);
+  for (const s of NICE_STEPS) {
+    const d = Math.abs(normalized - s);
+    if (d < bestDist) { best = s; bestDist = d; }
+  }
+  return best * magnitude;
+}
+
+function niceTicks(min: number, max: number, targetCount: number): number[] {
+  if (max <= min || targetCount <= 0) return [min];
+  const rawStep = (max - min) / targetCount;
+  const step = niceStep(rawStep);
+  const start = Math.floor(min / step) * step;
+  const ticks: number[] = [];
+  for (let v = start; v <= max + step * 0.001; v += step) {
+    ticks.push(Math.round(v / step) * step);
+  }
+  return ticks;
+}
+
+function symmetricTicks(maxAbs: number, targetCount: number): number[] {
+  const step = niceStep(maxAbs / Math.max(targetCount / 2, 1));
+  const ticks: number[] = [];
+  for (let v = -Math.ceil(maxAbs / step) * step; v <= maxAbs + step * 0.001; v += step) {
+    ticks.push(Math.round(v / step) * step);
+  }
+  return ticks;
+}
+
+function trigYSpecialTicks(): number[] {
+  return [-1, -0.5, 0, 0.5, 1];
+}
+
 function mapX(x: number, xMin: number, xMax: number, plotX: number, plotWidth: number): number {
   return plotX + ((x - xMin) / (xMax - xMin)) * plotWidth;
 }
@@ -91,21 +133,17 @@ function formatTick(v: number, scale?: string): string {
 function generatePiTicks(xMin: number, xMax: number, maxTicks: number): number[] {
   const pi = Math.PI;
   const range = xMax - xMin;
-  // Try common denominators: 1,2,3,4,6
-  // Pick the one that gives closest to maxTicks ticks
-  const stepOptions = [pi, pi / 2, pi / 3, pi / 4, pi / 6];
-  let bestStep = pi / 2;
-  let bestDiff = Infinity;
-  for (const step of stepOptions) {
-    const count = Math.floor(range / step) + 1;
-    const diff = Math.abs(count - maxTicks);
-    if (diff < bestDiff) { bestStep = step; bestDiff = diff; }
-  }
+  // Step selection based on domain width
+  let step: number;
+  if (range <= 2 * pi) step = pi / 2;
+  else if (range <= 4 * pi) step = pi;
+  else step = 2 * pi;
   // Snap start to nearest step multiple
-  const start = Math.ceil(xMin / bestStep) * bestStep;
+  const start = Math.ceil(xMin / step) * step;
   const ticks: number[] = [];
-  for (let v = start; v <= xMax + bestStep * 0.01; v += bestStep) {
-    ticks.push(Math.round(v / bestStep) * bestStep); // snap to avoid float drift
+  for (let v = start; v <= xMax + step * 0.01; v += step) {
+    if (ticks.length >= maxTicks) break;
+    ticks.push(Math.round(v / step) * step); // snap to avoid float drift
   }
   return ticks;
 }
@@ -447,23 +485,32 @@ export function renderPlotSvg(spec: PlotSpec): string {
       spec = { ...spec, yMin: yMid - targetYRange / 2, yMax: yMid + targetYRange / 2 };
     }
   }
-  const gridLines = 5;
-  // Pi-aware tick generation
+  // Resolve axis policies
+  const isFunction = spec.layoutPreset === "math";
+  const hasTrig = spec.xMode === "pi";
+  const { xPolicy, yPolicy } = resolveAxisPolicy(spec.intent, isFunction, hasTrig, spec.yMin, spec.yMax);
+
+  // X ticks
   let xTicks: number[];
-  if (spec.xMode === "pi") {
-    xTicks = generatePiTicks(spec.xMin, spec.xMax, gridLines);
+  if (xPolicy.mode === "pi") {
+    xTicks = generatePiTicks(spec.xMin, spec.xMax, xPolicy.maxTickCount);
   } else {
-    xTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.xMin + ((spec.xMax - spec.xMin) / gridLines) * i);
+    xTicks = niceTicks(spec.xMin, spec.xMax, xPolicy.preferredTickCount);
   }
-  // Generate y-axis ticks — linear or log scale
+  // Y ticks
   let yTicks: number[];
   if (spec.yScale === "log" && spec.yMin > 0 && spec.yMax > 0) {
     const logMin = Math.floor(Math.log10(spec.yMin));
     const logMax = Math.ceil(Math.log10(spec.yMax));
     yTicks = [];
     for (let p = logMin; p <= logMax; p++) yTicks.push(Math.pow(10, p));
+  } else if (yPolicy.trigYSpecial) {
+    yTicks = trigYSpecialTicks();
+  } else if (yPolicy.symmetric) {
+    const m = Math.max(Math.abs(spec.yMin), Math.abs(spec.yMax));
+    yTicks = symmetricTicks(m, yPolicy.preferredTickCount);
   } else {
-    yTicks = Array.from({ length: gridLines + 1 }, (_, i) => spec.yMin + ((spec.yMax - spec.yMin) / gridLines) * i);
+    yTicks = niceTicks(spec.yMin, spec.yMax, yPolicy.preferredTickCount);
   }
 
   const grid = spec.grid ? [

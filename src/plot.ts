@@ -488,6 +488,65 @@ export type BarMode = "grouped" | "stacked";
 
 export type AxisScale = "linear" | "log";
 
+// ── Axis semantic mode types ────────────────────────────────────────────────
+
+export type AxisMode = "auto" | "numeric" | "pi" | "symmetric";
+export type ChartStyle = "auto" | "math" | "report";
+
+export interface PlotIntent {
+  style?: ChartStyle;
+  xAxisMode?: AxisMode;
+  yAxisMode?: AxisMode;
+  aspect?: "auto" | "equal";
+}
+
+export interface ResolvedAxisPolicy {
+  mode: "numeric" | "pi";
+  style: "math" | "report";
+  symmetric: boolean;
+  preferredTickCount: number;
+  maxTickCount: number;
+  trigYSpecial: boolean;
+  source: "user" | "intent" | "default";
+}
+
+export interface AxisDebug {
+  x: { mode: string; source: string; ticks: string[] };
+  y: { mode: string; source: string; ticks: string[] };
+}
+
+export function resolveAxisPolicy(
+  intent: PlotIntent | undefined,
+  isFunction: boolean,
+  hasTrig: boolean,
+  yMin: number,
+  yMax: number
+): { xPolicy: ResolvedAxisPolicy; yPolicy: ResolvedAxisPolicy } {
+  const style: "math" | "report" = isFunction ? "math" : "report";
+  const prefCount = isFunction ? 6 : 5;
+  const maxCount = 7;
+
+  // X policy
+  let xMode: "numeric" | "pi" = "numeric";
+  let xSource: "user" | "intent" | "default" = "default";
+  if (intent?.xAxisMode === "pi") {
+    xMode = "pi";
+    xSource = "user";
+  } else if (hasTrig) {
+    xMode = "pi";
+    xSource = xSource === "default" ? "default" : xSource;
+  }
+
+  // Y policy
+  const symmetric = style === "math" && yMin < 0 && yMax > 0;
+  const trigYSpecial = hasTrig && yMin >= -1.3 && yMax <= 1.3;
+
+  return {
+    xPolicy: { mode: xMode, style, symmetric: false, preferredTickCount: prefCount, maxTickCount: maxCount, trigYSpecial: false, source: xSource },
+    yPolicy: { mode: "numeric", style, symmetric, preferredTickCount: prefCount, maxTickCount: maxCount, trigYSpecial, source: "default" },
+  };
+}
+
 export interface PlotSpec {
   title: string;
   xlabel: string;
@@ -503,6 +562,8 @@ export interface PlotSpec {
   xMode?: "pi" | "numeric";  // "pi" formats x-ticks as π fractions
   aspect?: "auto" | "equal";  // "equal" = 1:1 coordinate unit ratio
   layoutPreset?: "default" | "math";
+  intent?: PlotIntent;
+  axisDebug?: AxisDebug;
   categories?: string[];
   barMode?: boolean;
   barStyle?: BarMode;  // "grouped" | "stacked" for multi-series bars
@@ -983,6 +1044,10 @@ function resolveFunctionLayout(args: Record<string, unknown>): Pick<PlotSpec, "a
   return { aspect: "auto", layoutPreset: "math" };
 }
 
+function hasTrigExpr(expr: string): boolean {
+  return /\b(sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan)\b/i.test(expr);
+}
+
 export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
   const expr = String(args.expr || "").trim();
   const xMin = parseNumber(args.x_min, -10);
@@ -992,9 +1057,12 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
   const series = expr
     ? [makeFunctionSeries(expr, parseInteger(args.points, 1000), xMin, xMax, DEFAULT_PALETTE[0], expr)]
     : buildPiecewiseSeries(args.pieces, parseInteger(args.points, 1000), xMin, xMax);
-  // Auto-detect π mode for trig functions
   const { xMode } = detectPiMode(expr, xMin, xMax);
   const layout = resolveFunctionLayout(args);
+  const bounds = calculateBounds(series, annotations);
+  const isTrig = hasTrigExpr(expr);
+  const intent: PlotIntent | undefined = args.intent && typeof args.intent === "object" ? args.intent as PlotIntent : undefined;
+  const { xPolicy, yPolicy } = resolveAxisPolicy(intent, true, isTrig, bounds.yMin, bounds.yMax);
   return {
     title: safeTitle(args.title, expr ? "Function Plot" : "Piecewise Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -1005,7 +1073,12 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     mode: "xy",
     ...(xMode ? { xMode } : {}),
     ...layout,
-    ...calculateBounds(series, annotations),
+    ...bounds,
+    intent,
+    axisDebug: {
+      x: { mode: xPolicy.mode, source: xPolicy.source, ticks: [] },
+      y: { mode: yPolicy.trigYSpecial ? "trig-special" : (yPolicy.symmetric ? "symmetric" : "numeric"), source: yPolicy.source, ticks: [] },
+    },
   };
 }
 
@@ -1023,6 +1096,10 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
   // Auto-detect π mode for trig functions
   const { xMode } = detectPiMode(exprs.join(","), xMin, xMax);
   const layout = resolveFunctionLayout(args);
+  const bounds = calculateBounds(series, annotations);
+  const isTrig = exprs.some(e => hasTrigExpr(e));
+  const intent: PlotIntent | undefined = args.intent && typeof args.intent === "object" ? args.intent as PlotIntent : undefined;
+  const { xPolicy, yPolicy } = resolveAxisPolicy(intent, true, isTrig, bounds.yMin, bounds.yMax);
   return {
     title: safeTitle(args.title, "Multi Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -1033,7 +1110,12 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
     mode: "xy",
     ...(xMode ? { xMode } : {}),
     ...layout,
-    ...calculateBounds(series, annotations),
+    ...bounds,
+    intent,
+    axisDebug: {
+      x: { mode: xPolicy.mode, source: xPolicy.source, ticks: [] },
+      y: { mode: yPolicy.trigYSpecial ? "trig-special" : (yPolicy.symmetric ? "symmetric" : "numeric"), source: yPolicy.source, ticks: [] },
+    },
   };
 }
 
