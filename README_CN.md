@@ -12,7 +12,7 @@
 
 sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 `[-1, -0.5, 0, 0.5, 1]`，图例自动外置。
 
-![三角函数组合](docs/showcase/cn/trig_composition.png)
+![三角函数组合](docs/showcase/cn/01_trig_composition.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -29,7 +29,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
 
 逐级叠加奇次谐波逼近方波。4 条曲线，自动 π 轴。
 
-![傅里叶逼近](docs/showcase/cn/fourier_approx.png)
+![傅里叶逼近](docs/showcase/cn/02_fourier_approx.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -46,7 +46,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
 
 自动检测渐近线断点——无尖刺、无连接 ±∞ 的垂直线。引擎检测符号翻转 + 大 Δy 后自动断开路径。
 
-![tan 不连续](docs/showcase/cn/tan_discontinuity.png)
+![tan 不连续](docs/showcase/cn/03_tan_discontinuity.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -62,7 +62,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
 
 经典信号处理函数，x=0 处的可去奇点自动处理。
 
-![sinc 函数](docs/showcase/cn/sinc_function.png)
+![sinc 函数](docs/showcase/cn/04_sinc_function.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -78,7 +78,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
 
 x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影尖刺。
 
-![有理函数渐近线](docs/showcase/cn/rational_asymptotes.png)
+![有理函数渐近线](docs/showcase/cn/05_rational_asymptotes.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -98,7 +98,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 指数衰减 × 三角函数——自动规整刻度，15 个单位宽度内平滑渲染。
 
-![阻尼振荡](docs/showcase/cn/damped_oscillation.png)
+![阻尼振荡](docs/showcase/cn/06_damped_oscillation.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -114,7 +114,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 绝对值组合——非平凡波形与符号变化。
 
-![整流乘积](docs/showcase/cn/absolute_value.png)
+![整流乘积](docs/showcase/cn/07_absolute_value.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -130,7 +130,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 三个不同均值和方差的高斯分布——正态分布渲染。
 
-![高斯混合](docs/showcase/cn/gaussian_mixture.png)
+![高斯混合](docs/showcase/cn/08_gaussian_mixture.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -147,7 +147,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 区域着色、点标记、垂直线、文字标签——四种标注类型一图打尽。
 
-![标注峰值](docs/showcase/cn/annotated_peaks.png)
+![标注峰值](docs/showcase/cn/09_annotated_peaks.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -170,7 +170,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 预测 vs 实际 vs 目标——散点图上非对称误差条，图例外置不遮挡数据。
 
-![业务误差条](docs/showcase/cn/business_error_bars.png)
+![业务误差条](docs/showcase/cn/10_business_error_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -190,7 +190,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 3 个模型 × 4 项测试——每根柱子带独立误差条。
 
-![分组柱状](docs/showcase/cn/grouped_bars.png)
+![分组柱状](docs/showcase/cn/11_grouped_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -211,7 +211,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 云成本分解——计算、存储、网络按月堆叠。
 
-![堆叠柱状](docs/showcase/cn/stacked_bars.png)
+![堆叠柱状](docs/showcase/cn/12_stacked_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -232,7 +232,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 团队时间分配——环形饼图 + 百分比标签。
 
-![饼图](docs/showcase/cn/pie_chart.png)
+![饼图](docs/showcase/cn/13_pie_chart.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -247,7 +247,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 响应延迟分布——自动分箱，柱顶显示频次。
 
-![直方图](docs/showcase/cn/histogram.png)
+![直方图](docs/showcase/cn/14_histogram.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -263,7 +263,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 模型精度对比——中位数、四分位、须线、离群值。
 
-![箱线图](docs/showcase/cn/box_plot.png)
+![箱线图](docs/showcase/cn/15_box_plot.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -283,7 +283,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 训练损失 10 轮——y 轴自动切换对数刻度格式。
 
-![对数坐标](docs/showcase/cn/log_scale.png)
+![对数坐标](docs/showcase/cn/16_log_scale.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -300,7 +300,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 实验测量数据，上下不确定度不同——`error: { plus: [...], minus: [...] }`。
 
-![非对称误差](docs/showcase/cn/scatter_asymmetric.png)
+![非对称误差](docs/showcase/cn/17_scatter_asymmetric.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -316,7 +316,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 同一组噪声数据的三种视角：原始散点、平滑线（窗口=3）、min-max 归一化。
 
-![变换管线](docs/showcase/cn/transform_pipeline.png)
+![变换管线](docs/showcase/cn/18_transform_pipeline.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -336,7 +336,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 四种不同图表类型——折线、散点、函数——共享图例外置。
 
-![子图网格](docs/showcase/cn/subplot_2x2.png)
+![子图网格](docs/showcase/cn/19_subplot_2x2.png)
 
 ```json
 {"tool": "multi_plot", "arguments": {
@@ -357,7 +357,7 @@ x = ±1 处的垂直渐近线标注。引擎正确渲染极点间断，无伪影
 
 内置教学模块：积分区域着色、公式、上下限标注。
 
-![定积分教学](docs/showcase/cn/teaching_integral.png)
+![定积分教学](docs/showcase/cn/20_teaching_integral.png)
 
 ```json
 {"tool": "teaching", "arguments": {
