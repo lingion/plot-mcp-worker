@@ -1,137 +1,192 @@
 # plot-mcp-worker
 
-A Cloudflare Worker exposing an MCP (Model Context Protocol) server for mathematical plotting, physics force diagrams, circuit schematics, 3D shape visualization, and bar charts — all rendered server-side and returned as PNG, SVG, or interactive HTML.
+Serverless chart rendering engine. Runs on Cloudflare Workers. Outputs PNG/SVG via MCP protocol.
 
-## What It Does
+Zero dependencies at runtime. No headless browser. Pure SVG → PNG via resvg-wasm.
 
-Plot MCP turns natural language requests into publication-quality images. An AI agent calls one of the tools below, the Worker computes everything on the edge (no external rendering API), and returns a rendered image or a shareable link.
+---
 
-- **Math plots** — single expression, multi-expression overlays, custom (x,y) series, bar charts
-- **Physics diagrams** — free-body / force analysis SVGs with components, resultants, angles, inclines
-- **Circuit schematics** — batteries, resistors, lamps, switches, meters, transistors, op-amps. Grid-based coordinate system with automatic spacing.
-- **3D shapes** — interactive Plotly viewers for spheres, cubes, cones, tori, cylinders, pyramids, and mathematical surface plots with static SVG previews
-- **Template shortcuts** — common mechanics setups (incline, hanging mass, pulley) and circuit topologies (series, parallel, LED+resistor)
+## Showcase
 
-Chinese font rendering uses the bundled PingFang SC subset font to keep the Worker self-contained without shipping the full system font files.
+### Trigonometric Composition
+
+sin, cos, and their sum — π-formatted x-axis, trig y-special ticks `[-1, -0.5, 0, 0.5, 1]`, auto-legend outside plot area.
+
+![Trigonometric Composition](docs/showcase/trig_composition.png)
+
+```json
+{
+  "tool": "plot_multi",
+  "arguments": {
+    "exprs": ["sin(x)", "cos(x)", "sin(x)+cos(x)"],
+    "labels": ["sin(x)", "cos(x)", "sin(x) + cos(x)"],
+    "x_min": -6.283, "x_max": 6.283,
+    "title": "Trigonometric Composition"
+  }
+}
+```
+
+---
+
+### Discontinuity Detection
+
+tan(x) with automatic asymptote break detection — no spikes, no vertical lines connecting ±∞. The engine detects sign-flip + large Δy and breaks the path.
+
+![tan(x) Discontinuity](docs/showcase/tan_discontinuity.png)
+
+```json
+{
+  "tool": "plot_png_link",
+  "arguments": {
+    "expr": "tan(x)",
+    "x_min": -4.712, "x_max": 4.712,
+    "title": "tan(x) — Discontinuity Detection"
+  }
+}
+```
+
+---
+
+### Damped Oscillation
+
+Exponential decay envelope × trig — smooth rendering with automatic nice ticks on both axes.
+
+![Damped Oscillation](docs/showcase/damped_oscillation.png)
+
+```json
+{
+  "tool": "plot_png_link",
+  "arguments": {
+    "expr": "exp(-0.3*x)*sin(2*x)",
+    "x_min": 0, "x_max": 15,
+    "title": "Damped Oscillation: e^(-0.3x)·sin(2x)"
+  }
+}
+```
+
+---
+
+### Rational Function with Annotations
+
+1/(x²-1) with vertical asymptote markers. Engine renders the pole gaps correctly without artifact spikes.
+
+![Rational Asymptotes](docs/showcase/rational_asymptotes.png)
+
+```json
+{
+  "tool": "plot_png_link",
+  "arguments": {
+    "expr": "1/(x^2-1)",
+    "x_min": -4, "x_max": 4,
+    "title": "1/(x²-1) — Rational Function",
+    "annotations": [
+      {"kind": "vertical_line", "x": -1, "label": "x = -1", "color": "#f87171"},
+      {"kind": "vertical_line", "x":  1, "label": "x = 1",  "color": "#f87171"}
+    ]
+  }
+}
+```
+
+---
+
+### Multi-Series with Error Bars
+
+Business data: line+scatter with asymmetric error bars, grouped legend outside plot area.
+
+![Business Error Bars](docs/showcase/business_error_bars.png)
+
+```json
+{
+  "tool": "plot_series",
+  "arguments": {
+    "title": "Q1-Q4 Revenue Forecast vs Actual",
+    "xlabel": "Quarter", "ylabel": "Revenue (M USD)",
+    "series": [
+      {"name": "Forecast", "type": "line+scatter", "points": [[1,120],[2,185],[3,310],[4,490]], "color": "#60a5fa", "error": [8,12,20,35]},
+      {"name": "Actual",   "type": "line+scatter", "points": [[1,135],[2,178],[3,345],[4,510]], "color": "#f87171", "error": [5,10,15,25]},
+      {"name": "Target",   "type": "line",         "points": [[1,150],[2,200],[3,300],[4,450]], "color": "#34d399"}
+    ]
+  }
+}
+```
+
+---
+
+### Grouped Bar Chart with Error Bars
+
+Grouped bars with per-bar error bars, auto-category labels, dark theme legend.
+
+![Grouped Bars](docs/showcase/grouped_bars.png)
+
+```json
+{
+  "tool": "plot_series",
+  "arguments": {
+    "title": "Performance Benchmarks",
+    "xlabel": "Test", "ylabel": "Score",
+    "bar_style": "grouped",
+    "series": [
+      {"name": "Model A", "type": "bar", "points": [[0,92],[1,78],[2,85],[3,95]], "group": "g", "color": "#60a5fa", "error": [2,3,2,1]},
+      {"name": "Model B", "type": "bar", "points": [[0,88],[1,82],[2,91],[3,87]], "group": "g", "color": "#f87171", "error": [3,2,1,2]},
+      {"name": "Model C", "type": "bar", "points": [[0,95],[1,74],[2,79],[3,90]], "group": "g", "color": "#34d399", "error": [1,4,3,2]}
+    ]
+  }
+}
+```
+
+---
+
+## Features
+
+**Rendering**
+- Pure SVG generation → PNG via resvg-wasm (no headless browser)
+- Transparent or dark-theme card backgrounds
+- Line, scatter, line+scatter, bar, grouped bar, stacked bar, histogram, box plot, pie chart
+- Multi-plot subplot grids (M×N)
+- Error bars (symmetric & asymmetric) on line, scatter, and bar
+- Annotations: vertical lines, points, labels, shaded areas
+
+**Axis Engine (v0.4.13)**
+- Nice ticks: 1, 2, 2.5, 5 × 10^n step selection
+- Automatic π-mode x-axis for trig functions
+- Trig y-special: sin/cos gets `[-1, -0.5, 0, 0.5, 1]`
+- 0-symmetric y-axis for math-style function plots
+- Discontinuity detection (sign-flip + large Δy → path break)
+- Intent system: LLM suggests semantic mode, engine owns geometry
+
+**Math**
+- Expression parser: `sin(x)`, `exp(-0.3*x)*cos(x)`, `1/(x^2-1)`, piecewise functions
+- Up to 20,000 points per series
+- Transform pipeline: normalize, smooth, filter, rolling average, downsample
+
+**Design**
+- Dark theme first-class: `#0f172a` card, `#111827` plot area, `#334155` grid
+- Legend outside plot area (right-side reserved)
+- Math preset (1000×720) vs report preset (1200×720)
+- Line halo for readability without visual noise
 
 ## MCP Tools
 
-### Plotting
-
-| Tool | Returns | Description |
-|------|---------|-------------|
-| `plot` | PNG image | Plot a single expression |
-| `plot_json` | PNG base64 payload | Same, with structured response |
-| `plot_png_link` | Direct PNG URL | Same, returns a shareable link |
-| `plot_multi` | PNG image | Plot multiple expressions on one chart |
-| `plot_multi_json` | PNG base64 payload | Same, structured response |
-| `plot_multi_png_link` | Direct PNG URL | Same, shareable link |
-| `plot_series` | PNG image | Plot custom (x,y) point series |
-| `plot_series_json` | PNG base64 payload | Same, structured response |
-| `plot_series_png_link` | Direct PNG URL | Same, shareable link |
-| `plot_bar_json` | PNG base64 payload | Render a bar chart |
-| `plot_multi_images` | Multiple images | Batch-generate several plots in one call |
-
-<p align="center">
-  <img src="docs/examples/plot.png" width="45%" alt="Single expression plot">
-  <img src="docs/examples/plot_multi.png" width="45%" alt="Multi-expression plot">
-</p>
-<p align="center">
-  <img src="docs/examples/plot_series.png" width="45%" alt="Custom series plot">
-  <img src="docs/examples/plot_bar.png" width="45%" alt="Bar chart">
-</p>
-
-### Physics Force Diagrams
-
-| Tool | Returns | Description |
-|------|---------|-------------|
-| `force_diagram_link` | SVG link | Basic free-body diagram |
-| `force_analysis_link` | SVG link | Full analysis with axes, components, resultant, incline |
-| `force_analysis_template_link` | SVG link | Pre-built templates: incline, hanging, horizontal, pulley, spring, double_block, pulley_group, spring_oscillator |
-
-<p align="center">
-  <img src="docs/examples/force_analysis.svg" width="45%" alt="Force analysis diagram">
-  <img src="docs/examples/force_template.svg" width="45%" alt="Force template (incline)">
-</p>
-
-### Circuit Diagrams
-
-| Tool | Returns | Description |
-|------|---------|-------------|
-| `circuit_diagram_link` | SVG link | Custom circuit with components, wires, stages, branches |
-| `circuit_template_link` | SVG link | Pre-built: series, parallel, switch_lamp, source_resistor, led_resistor, meter_loop, transistor_switch, relay_driver, buzzer_loop, opamp_follower |
-
-<p align="center">
-  <img src="docs/examples/circuit.svg" width="45%" alt="Circuit schematic (series)">
-</p>
-
-### 3D Shapes
-
-| Tool | Returns | Description |
-|------|---------|-------------|
-| `shape3d_link` | SVG preview + interactive HTML | 3D surface rendering. Returns a static SVG contour preview (`svg_url`) for MCP clients, plus an interactive Plotly viewer (`html_url`). Supports multi-surface overlays, custom color scales, and contour lines. |
-
-<p align="center">
-  <img src="docs/examples/shape3d_preview.svg" width="60%" alt="3D surface preview">
-</p>
-
-### Utility
-
 | Tool | Description |
 |------|-------------|
-| `health` | Check worker health and list available tools |
+| `plot` | Plot a single expression (auto-detect π, trig, etc.) |
+| `plot_multi` | Plot multiple expressions on one chart |
+| `plot_series` | Plot from explicit data arrays (line/scatter/bar/hist/box/pie) |
+| `plot_bar` | Bar chart shorthand |
+| `multi_plot` | M×N subplot grid |
+| `analysis` | Statistics: describe, correlation, groupby |
+| `diagram` | Force diagrams, circuit diagrams, Venn diagrams |
+| `geometry_3d` | 3D shape rendering |
+| `teaching` | Math teaching templates (definite integral, tangent, Fourier, etc.) |
 
-## Quick Start
-
-### Local Development
-
-```bash
-npm install
-npx wrangler dev --local --port 8790
-```
-
-Health check:
-
-```bash
-curl http://127.0.0.1:8790/healthz
-```
-
-### Deploy
+## Deployment
 
 ```bash
 npx wrangler deploy
 ```
 
-All rendering happens in-worker — no upstream dependencies.
-
-## Project Structure
-
-```
-plot-mcp-worker/
-├── src/
-│   └── index.js        # Worker entry, MCP tool handlers, rendering logic
-├── wrangler.toml       # Cloudflare Worker config
-├── package.json
-└── README.md
-```
-
-## Configuration
-
-Environment variables (set in `wrangler.toml` or Cloudflare dashboard):
-
-None required. The Worker is fully self-contained.
-
-## Limits
-
-| Parameter | Limit |
-|-----------|-------|
-| Points per plot | 10 – 20,000 |
-| Expression length | 400 chars |
-| Title / label length | 120 / 80 chars |
-| Series per chart | 12 |
-| Force bodies / surfaces / connectors | 16 / 6 / 10 |
-| Circuit components / wires | 24 / 48 |
+Requires Cloudflare Workers with a KV namespace for short-link PNG URLs.
 
 ## License
 
-Private repository. All rights reserved.
+MIT
