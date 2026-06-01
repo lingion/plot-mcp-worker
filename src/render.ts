@@ -1,6 +1,6 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
-import pingFangSubset from "./PingFangSC-Regular.subset.ttf";
+import heitiSubset from "./HeitiSC-Medium.subset.ttf";
 import arialSans from "./ArialSans";
 import { normalizeErrorAt, MultiPlotCell, MultiPlotResult, resolveAxisPolicy, PlotIntent, ResolvedAxisPolicy } from "./plot";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
@@ -974,7 +974,7 @@ export function renderSpecToSvg(spec: PlotSpec): string {
 
 export async function renderPngBase64(svg: string, env: Env): Promise<string> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(heitiSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: "transparent",
@@ -992,7 +992,7 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
 
 export async function renderPngResponse(svg: string, env: Env): Promise<Response> {
   await ensureResvgReady();
-  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(pingFangSubset)];
+  const fontBuffers: Uint8Array[] = [new Uint8Array(arialSans), new Uint8Array(heitiSubset)];
   const renderer = new Resvg(svg, {
     fitTo: { mode: "original" },
     background: "transparent",
