@@ -1,5 +1,7 @@
 # plot-mcp-worker
 
+[中文版](README_CN.md)
+
 Serverless chart rendering engine. Runs on Cloudflare Workers. Outputs PNG/SVG via MCP protocol.
 
 Zero dependencies at runtime. No headless browser. Pure SVG → PNG via resvg-wasm.
