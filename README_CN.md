@@ -19,7 +19,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
   "exprs": ["sin(x)", "cos(x)", "sin(x)+cos(x)"],
   "labels": ["sin(x)", "cos(x)", "sin(x) + cos(x)"],
   "x_min": -6.283, "x_max": 6.283,
-  "title": "Trigonometric Composition"
+  "title": "三角函数组合"
 }}
 ```
 
@@ -68,7 +68,7 @@ sin、cos 及其叠加——自动检测 π 轴模式，y 轴 trig 专用刻度 
 {"tool": "plot_png_link", "arguments": {
   "expr": "sin(x)/x",
   "x_min": -15, "x_max": 15,
-  "title": "sinc(x) = sin(x)/x"
+  "title": "sinc 函数: sin(x)/x"
 }}
 ```
 
