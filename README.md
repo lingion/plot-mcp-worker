@@ -2,17 +2,17 @@
 
 [中文版](README_CN.md)
 
-Serverless chart rendering engine. Runs on Cloudflare Workers. Outputs PNG/SVG via MCP protocol.
+A serverless chart rendering engine running on Cloudflare Workers. It exposes an MCP (Model Context Protocol) server that lets any AI agent generate publication-quality PNG/SVG charts from a single JSON call — no headless browser, no server, no storage bucket.
 
-Zero dependencies at runtime. No headless browser. Pure SVG → PNG via resvg-wasm.
+Charts are rendered as SVG, then rasterized to PNG via [resvg-wasm](https://github.com/nicbarker/resvg-js). CJK text (GB2312 + punctuation + math symbols, 7500+ glyphs) is handled through an opentype.js text-to-path pipeline that embeds font outlines directly into the SVG, ensuring correct rendering regardless of client fonts.
+
+**Live endpoint:** `https://plot-mcp.qdp.qzz.io/mcp`
 
 ---
 
 ## Showcase
 
 ### 1. Trigonometric Composition
-
-sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `[-1, -0.5, 0, 0.5, 1]`, auto legend outside plot area.
 
 ![Trigonometric Composition](docs/showcase/en/01_trig_composition.png)
 
@@ -25,11 +25,7 @@ sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `
 }}
 ```
 
----
-
 ### 2. Square Wave — Fourier Series Approximation
-
-Progressively adding odd harmonics to approximate a square wave. 4 series, auto π-axis, math preset.
 
 ![Fourier Approximation](docs/showcase/en/02_fourier_approx.png)
 
@@ -42,11 +38,7 @@ Progressively adding odd harmonics to approximate a square wave. 4 series, auto 
 }}
 ```
 
----
-
 ### 3. tan(x) — Discontinuity Detection
-
-Automatic asymptote break detection — no spikes, no vertical lines connecting ±∞. The engine detects sign-flip + large Δy and breaks the path.
 
 ![tan(x) Discontinuity](docs/showcase/en/03_tan_discontinuity.png)
 
@@ -58,11 +50,7 @@ Automatic asymptote break detection — no spikes, no vertical lines connecting 
 }}
 ```
 
----
-
 ### 4. sinc(x) = sin(x)/x
-
-Classic signal processing function with removable singularity handling at x=0.
 
 ![sinc Function](docs/showcase/en/04_sinc_function.png)
 
@@ -74,11 +62,7 @@ Classic signal processing function with removable singularity handling at x=0.
 }}
 ```
 
----
-
 ### 5. 1/(x²-1) — Rational Function with Asymptote Annotations
-
-Vertical asymptote markers at x = ±1. The engine renders pole gaps without artifact spikes.
 
 ![Rational Asymptotes](docs/showcase/en/05_rational_asymptotes.png)
 
@@ -89,339 +73,433 @@ Vertical asymptote markers at x = ±1. The engine renders pole gaps without arti
   "title": "1/(x²-1) — Rational Function",
   "annotations": [
     {"kind": "vertical_line", "x": -1, "label": "x = -1", "color": "#f87171"},
-    {"kind": "vertical_line", "x":  1, "label": "x = 1",  "color": "#f87171"}
+    {"kind": "vertical_line", "x": 1, "label": "x = 1", "color": "#f87171"}
   ]
 }}
 ```
 
----
-
-### 6. Damped Oscillation
-
-Exponential decay × trig — automatic nice ticks, smooth rendering across 15 units.
+### 6. Damped Oscillation: e^(-0.3x)·sin(2x)
 
 ![Damped Oscillation](docs/showcase/en/06_damped_oscillation.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
   "expr": "exp(-0.3*x)*sin(2*x)",
-  "x_min": 0, "x_max": 15,
+  "x_min": 0, "x_max": 20,
   "title": "Damped Oscillation: e^(-0.3x)·sin(2x)"
 }}
 ```
 
----
-
 ### 7. |sin(x)|·cos(x) — Rectified Product
 
-Absolute value composition — non-trivial waveform with sign changes.
-
-![Rectified Product](docs/showcase/en/07_absolute_value.png)
+![Absolute Value](docs/showcase/en/07_absolute_value.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
   "expr": "abs(sin(x))*cos(x)",
-  "x_min": -10, "x_max": 10,
+  "x_min": -6.283, "x_max": 6.283,
   "title": "|sin(x)|·cos(x) — Rectified Product"
 }}
 ```
 
----
-
 ### 8. Gaussian Mixture Model
-
-Three Gaussians with different means and variances — normal distribution rendering at its finest.
 
 ![Gaussian Mixture](docs/showcase/en/08_gaussian_mixture.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
-  "exprs": ["exp(-x*x/2)/sqrt(2*3.14159)", "0.6*exp(-(x-2)*(x-2)/1.5)/sqrt(2*3.14159*1.5)", "0.4*exp(-(x+1.5)*(x+1.5)/0.8)/sqrt(2*3.14159*0.8)"],
+  "exprs": ["exp(-x*x/2)/sqrt(2*3.14159)", "0.6*exp(-(x-2)*(x-2)/4.5)/sqrt(2*3.14159*1.5)", "0.4*exp(-(x+1.5)*(x+1.5)/1.6)/sqrt(2*3.14159*0.8)"],
   "labels": ["N(0,1)", "0.6·N(2,1.5)", "0.4·N(-1.5,0.8)"],
-  "x_min": -6, "x_max": 8,
+  "x_min": -6, "x_max": 6,
   "title": "Gaussian Mixture Model"
 }}
 ```
 
----
-
 ### 9. Decaying Sine with Full Annotation Suite
-
-Area shading, point markers, vertical line, and text labels — all annotation types in one chart.
 
 ![Annotated Peaks](docs/showcase/en/09_annotated_peaks.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
-  "expr": "sin(x)*exp(-0.1*x)",
-  "x_min": 0, "x_max": 20,
-  "title": "Decaying Sine with Annotations",
+  "expr": "exp(-0.2*x)*sin(3*x)",
+  "x_min": 0, "x_max": 15,
+  "title": "Decaying Sine + Full Annotation Suite",
   "annotations": [
-    {"kind": "area", "x_min": 4.5, "x_max": 7.5, "label": "1st peak zone", "color": "#60a5fa", "opacity": 0.15},
-    {"kind": "area", "x_min": 11, "x_max": 14, "label": "2nd peak zone", "color": "#34d399", "opacity": 0.15},
-    {"kind": "point", "x": 5.5, "y": 0.58, "label": "Peak 1", "color": "#fbbf24"},
-    {"kind": "point", "x": 12, "y": 0.30, "label": "Peak 2", "color": "#fbbf24"},
-    {"kind": "vertical_line", "x": 10, "label": "Half-life ≈ 10", "color": "#f87171"}
+    {"kind": "point", "x": 0.52, "label": "1st peak"},
+    {"kind": "shaded_area", "x_min": 5, "x_max": 8, "label": "focus zone"}
   ]
 }}
 ```
-
----
 
 ### 10. Multi-Series Business Chart with Error Bars
 
-Forecast vs Actual vs Target — asymmetric error bars on scatter, clean legend outside plot area.
-
 ![Business Error Bars](docs/showcase/en/10_business_error_bars.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Q1-Q4 Revenue Forecast vs Actual",
-  "xlabel": "Quarter", "ylabel": "Revenue (M USD)",
-  "series": [
-    {"name": "Forecast", "type": "line+scatter", "points": [[1,120],[2,185],[3,310],[4,490]], "color": "#60a5fa", "error": [8,12,20,35]},
-    {"name": "Actual",   "type": "line+scatter", "points": [[1,135],[2,178],[3,345],[4,510]], "color": "#f87171", "error": [5,10,15,25]},
-    {"name": "Target",   "type": "line",         "points": [[1,150],[2,200],[3,300],[4,450]], "color": "#34d399"}
-  ]
-}}
-```
-
----
 
 ### 11. Grouped Bar Chart with Error Bars
 
-3 models × 4 tests — per-bar error bars, auto-category labels.
-
 ![Grouped Bars](docs/showcase/en/11_grouped_bars.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Performance Benchmarks",
-  "xlabel": "Test", "ylabel": "Score",
-  "bar_style": "grouped",
-  "series": [
-    {"name": "Model A", "type": "bar", "points": [[0,92],[1,78],[2,85],[3,95]], "group": "g", "color": "#60a5fa", "error": [2,3,2,1]},
-    {"name": "Model B", "type": "bar", "points": [[0,88],[1,82],[2,91],[3,87]], "group": "g", "color": "#f87171", "error": [3,2,1,2]},
-    {"name": "Model C", "type": "bar", "points": [[0,95],[1,74],[2,79],[3,90]], "group": "g", "color": "#34d399", "error": [1,4,3,2]}
-  ]
-}}
-```
-
----
 
 ### 12. Stacked Bar Chart
 
-Cloud cost breakdown — compute, storage, network stacked by month.
-
 ![Stacked Bars](docs/showcase/en/12_stacked_bars.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Cloud Infrastructure Costs — Stacked",
-  "xlabel": "Month", "ylabel": "Cost ($)",
-  "bar_style": "stacked",
-  "series": [
-    {"name": "Compute", "type": "bar", "points": [[1,3200],[2,3500],[3,4100],[4,4800],[5,5200],[6,5600]], "group": "g", "color": "#60a5fa"},
-    {"name": "Storage", "type": "bar", "points": [[1,1200],[2,1400],[3,1600],[4,1900],[5,2200],[6,2500]], "group": "g", "color": "#34d399"},
-    {"name": "Network", "type": "bar", "points": [[1,800],[2,900],[3,1100],[4,1300],[5,1500],[6,1800]], "group": "g", "color": "#fbbf24"}
-  ]
-}}
-```
-
----
 
 ### 13. Pie Chart
 
-Team time allocation — donut-style with percentage labels.
-
 ![Pie Chart](docs/showcase/en/13_pie_chart.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Time Allocation — AI Research Team",
-  "series": [{"type": "pie", "name": "team", "labels": ["Training","Data Prep","Evaluation","Infra","Meetings","Research"], "values": [35,20,15,12,8,10]}]
-}}
-```
-
----
 
 ### 14. Histogram
 
-Response latency distribution with auto-binning.
-
 ![Histogram](docs/showcase/en/14_histogram.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Response Latency Distribution",
-  "xlabel": "Latency", "ylabel": "Count",
-  "series": [{"type": "hist", "name": "latency", "data": [12,15,18,22,25,28,30,32,35,38,41,45,48,52,55,58,62,65,68,72,75,78,82,85,88,92,95,98,102,105,108,112,115,118,122,125,128,132,135,138,142,145,148,152,155,158,162], "bins": 10}]
-}}
-```
-
----
 
 ### 15. Box Plot
 
-Model accuracy comparison — median, quartiles, whiskers, outliers.
-
 ![Box Plot](docs/showcase/en/15_box_plot.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Model Accuracy Across Datasets",
-  "ylabel": "Accuracy (%)",
-  "series": [
-    {"type": "box", "name": "GPT-4",  "data": [82,85,87,89,90,91,92,93,94,95,97]},
-    {"type": "box", "name": "Claude", "data": [80,84,86,88,90,91,92,93,95,96,98]},
-    {"type": "box", "name": "Gemini", "data": [75,79,83,85,87,89,90,92,93,94,96]}
-  ]
-}}
-```
-
----
 
 ### 16. Log Scale
 
-Training loss over 10 epochs — y-axis automatically switches to logarithmic tick formatting.
-
 ![Log Scale](docs/showcase/en/16_log_scale.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Training Loss (Log Scale)",
-  "xlabel": "Epoch", "ylabel": "Loss",
-  "y_scale": "log",
-  "series": [{"name": "Loss", "type": "line", "points": [[1,2.5],[2,1.8],[3,0.95],[4,0.42],[5,0.18],[6,0.072],[7,0.031],[8,0.014],[9,0.006],[10,0.003]], "color": "#a78bfa"}]
-}}
-```
-
----
 
 ### 17. Scatter with Asymmetric Error Bars
 
-Experimental measurements where uncertainty is not symmetric — `error: { plus: [...], minus: [...] }`.
-
 ![Scatter Asymmetric](docs/showcase/en/17_scatter_asymmetric.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Experimental Measurements — Asymmetric Uncertainty",
-  "xlabel": "Temperature (K)", "ylabel": "Conductivity (S/m)",
-  "series": [{"name": "Measurement", "type": "scatter", "points": [[200,0.12],[250,0.28],[300,0.45],[350,0.67],[400,0.88],[450,1.05],[500,1.22]], "color": "#f472b6", "error": {"plus": [0.02,0.03,0.05,0.08,0.06,0.04,0.03], "minus": [0.01,0.02,0.03,0.05,0.04,0.03,0.02]}}]
-}}
-```
-
----
 
 ### 18. Transform Pipeline — Raw → Smoothed → Normalized
 
-Three views of the same noisy data: raw scatter, smoothed line (window=3), and min-max normalized.
-
 ![Transform Pipeline](docs/showcase/en/18_transform_pipeline.png)
-
-```json
-{"tool": "plot_series", "arguments": {
-  "title": "Raw → Smoothed → Normalized Pipeline",
-  "xlabel": "Sample", "ylabel": "Value",
-  "series": [
-    {"name": "Raw",        "type": "scatter", "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#475569"},
-    {"name": "Smoothed",   "type": "line",    "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#60a5fa", "transforms": [{"type": "smooth", "window": 3}]},
-    {"name": "Normalized", "type": "line",    "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#f472b6", "transforms": [{"type": "normalize", "method": "minmax"}]}
-  ]
-}}
-```
-
----
 
 ### 19. 2×2 Subplot Grid
 
-Four different chart types in one figure — line, scatter, function — with shared legend outside the grid.
-
 ![Subplot 2x2](docs/showcase/en/19_subplot_2x2.png)
-
-```json
-{"tool": "multi_plot", "arguments": {
-  "title": "Function Gallery",
-  "rows": 2, "cols": 2,
-  "plots": [
-    {"row": 0, "col": 0, "title": "sin(x)",    "series": [{"type": "line",    "name": "sin(x)",   "points": [[-3.14,0],[-1.57,-1],[0,0],[1.57,1],[3.14,0]],  "color": "#60a5fa"}]},
-    {"row": 0, "col": 1, "title": "x²",         "series": [{"type": "line",    "name": "x²",       "points": [[-3,9],[-2,4],[-1,1],[0,0],[1,1],[2,4],[3,9]],   "color": "#f87171"}]},
-    {"row": 1, "col": 0, "title": "exp(-x)",    "series": [{"type": "line",    "name": "exp(-x)",  "points": [[-2,7.39],[-1,2.72],[0,1],[1,0.37],[2,0.14]],    "color": "#34d399"}]},
-    {"row": 1, "col": 1, "title": "log(x)",     "series": [{"type": "scatter", "name": "log(x)",   "points": [[0.1,-2.3],[0.5,-0.69],[1,0],[2,0.69],[5,1.6]], "color": "#fbbf24"}]}
-  ]
-}}
-```
-
----
 
 ### 20. Teaching Template — Definite Integral
 
-Built-in teaching module: shaded integral region, formula, bounds.
-
 ![Teaching Integral](docs/showcase/en/20_teaching_integral.png)
-
-```json
-{"tool": "teaching", "arguments": {
-  "topic": "definite_integral",
-  "params": {"expr": "x^2 - x + 1", "a": 0, "b": 3},
-  "title": "∫₀³ (x² - x + 1) dx"
-}}
-```
 
 ---
 
 ## Features
 
-### Rendering
-- Pure SVG → PNG via resvg-wasm (no headless browser, no puppeteer)
-- Dark theme first-class: `#0f172a` card, `#111827` plot area, `#334155` grid
-- Chart types: line, scatter, line+scatter, bar, grouped bar, stacked bar, histogram, box plot, pie
-- Multi-plot subplot grids (M × N) with shared legend
-- Error bars (symmetric array / constant / asymmetric `{plus, minus}`) on line, scatter, and bar
-- Annotations: vertical lines, point markers, text labels, shaded areas
+### Chart Types
 
-### Axis Engine (v0.4.13)
-- **Nice ticks**: step selection from 1, 2, 2.5, 5 × 10ⁿ — no ugly values like 0.72 or 1.2
-- **Auto π-mode**: trig functions automatically get π-formatted x-axis
-- **Trig y-special**: sin/cos gets `[-1, -0.5, 0, 0.5, 1]` instead of arbitrary decimals
-- **0-symmetric**: math-style function plots default to symmetric y-axis
-- **Discontinuity detection**: sign-flip + large Δy → path break (no vertical spikes)
-- **Intent system**: LLM suggests semantic mode, engine owns geometry
+| Type | Description |
+|------|-------------|
+| Function plot | Single expression `f(x)` — auto-detected trig/π mode, discontinuity handling |
+| Multi-expression | Multiple `f(x)` curves on one chart with auto legend |
+| Scatter / Line | Explicit `(x, y)` data arrays with optional error bars |
+| Bar / Grouped / Stacked | Categorical bar charts with error bars |
+| Histogram | Automatic binning from raw data |
+| Box plot | Per-group distribution with whiskers, median, outliers |
+| Pie chart | Labeled slices with percentage display |
+| Subplot grid | M×N layout with shared axes and per-cell series |
 
-### Math
-- Expression parser via expr-eval: `sin(x)`, `exp(-0.3*x)*cos(2*x)`, `1/(x^2-1)`
-- Piecewise functions
-- Up to 20,000 points per series
-- Transform pipeline: normalize (minmax/zscore/maxabs), smooth, filter, rolling average, downsample
+### Axis Engine
+
+The axis system uses an intent-driven architecture: the caller (typically an LLM) suggests a semantic mode, and the engine computes the actual tick values, labels, and bounds.
+
+- **Nice ticks**: Steps from `{1, 2, 2.5, 5} × 10ⁿ` — no values like 0.72 or 1.3
+- **Auto π-mode**: Trigonometric expressions automatically get `−2π, −π, 0, π, 2π` x-axis labels
+- **Trig y-special**: sin/cos plots get `[-1, -0.5, 0, 0.5, 1]` ticks instead of arbitrary decimals
+- **0-symmetric**: Function plots default to a y-axis centered on zero
+- **Discontinuity detection**: Sign-flip + large Δy triggers path breaks — no vertical spikes in tan(x), 1/x, etc.
+
+### CJK Text Rendering
+
+Chinese and other CJK text is rendered via an opentype.js text-to-path pipeline:
+
+1. The SVG is generated with `<text>` elements as usual
+2. Before rasterization, `pathifyCjkText()` finds all `<text>` elements containing CJK characters
+3. Each is converted to `<path>` using opentype.js `font.getPath()`, embedding the actual glyph outlines
+4. resvg then rasterizes the path-based SVG — no font matching needed
+
+The font subset covers **7,556 characters**: full GB2312 (6,763 CJK + symbols), ASCII, fullwidth punctuation (·——、。，：；！？""''【】《》…), and math symbols (αβγπ∫∑√∞≤≥±).
+
+### Data Transforms
+
+A pipeline system processes series data before rendering:
+
+| Transform | Description |
+|-----------|-------------|
+| `normalize` | Min-max, z-score, or max-abs normalization |
+| `smooth` | Moving average with configurable window |
+| `filter` | Range-based filtering on x or y |
+| `rolling` | Rolling statistics (mean, median, std) |
+| `downsample` | Reduce point count via min-max or LTTB |
+
+### Annotations
+
+Rich annotation layer for marking up plots:
+
+- **Vertical lines** with labels (asymptotes, thresholds)
+- **Point markers** with text labels (peaks, zeros, events)
+- **Shaded areas** with labels (regions of interest)
+- **Text labels** at arbitrary coordinates
 
 ### MCP Tools
 
+The server exposes these tools via the MCP protocol (JSON-RPC over HTTP POST):
+
+#### Plotting
+
 | Tool | Description |
 |------|-------------|
-| `plot` / `plot_png_link` | Single expression — auto π, trig detection, discontinuity handling |
-| `plot_multi` | Multiple expressions on one chart |
-| `plot_series` | Explicit data arrays — line/scatter/bar/hist/box/pie + error bars |
-| `plot_bar` | Bar chart shorthand |
+| `plot` / `plot_png_link` | Single expression — auto π, trig, discontinuity |
+| `plot_multi` / `plot_multi_png_link` | Multiple expressions on one chart |
+| `plot_series` / `plot_series_png_link` | Explicit data arrays — scatter/bar/hist/box/pie + error bars |
+| `plot_bar` / `plot_bar_json` | Bar chart shorthand |
 | `multi_plot` | M×N subplot grid with shared legend |
-| `analysis` | Statistics: describe, correlation, groupby |
-| `teaching` | Math templates: definite integral, tangent/derivative, Fourier series, projectile, SHM, energy, RC/RLC, parabola |
-| `diagram` | Force diagrams, circuit diagrams, Venn diagrams |
-| `geometry_3d` | 3D shape rendering |
 
-### Design
-- Legend outside plot area (right-side reserved) — never overlaps data
-- Math preset (1000×720) vs report preset (1200×720)
-- Line halo at 0.30 opacity — readable but invisible to the user
-- Font: system sans-serif with PingFang SC subset for CJK
+#### Diagrams
 
-## Deployment
+| Tool | Description |
+|------|-------------|
+| `force_diagram_link` | Free-body / force diagram |
+| `force_analysis_link` | Force analysis with axes, components, resultant |
+| `force_analysis_template_link` | Pre-built mechanics templates (incline, hanging mass, etc.) |
+| `circuit_diagram_link` | Circuit schematic with common components |
+| `circuit_template_link` | Pre-built circuit templates (series, parallel, etc.) |
+| `venn_diagram_link` | 2-set or 3-set Venn diagram |
+| `c_memory_diagram_link` | C-language memory layout / pointer diagram |
+| `shape3d_link` | Interactive 3D shape viewer |
+
+#### Teaching
+
+| Tool | Description |
+|------|-------------|
+| `teaching_template` | Single teaching visualization (definite integral, tangent, projectile, SHM, etc.) |
+| `teaching_sequence` | Coordinated multi-figure teaching sequence |
+
+#### Analysis
+
+| Tool | Description |
+|------|-------------|
+| `analysis` | Statistical operations: `describe`, `corr`, `groupby` |
+
+### Design System
+
+- **Dark theme default**: `#0f172a` card, `#111827` plot area, `#334155` grid at 0.35 opacity
+- **Color palette**: `#60a5fa, #f87171, #34d399, #fbbf24, #a78bfa, #22d3ee, #fb923c, #f472b6`
+- **Legend**: Placed outside plot area (right-side reserved) — never overlaps data
+- **Layout presets**: Math (1000×720) for functions, Report (1200×720) for data charts
+- **Line halo**: 0.30 opacity dark stroke behind each line — readable on any background without visual clutter
+
+---
+
+## Quick Start
+
+### Using with an MCP Client
+
+Any MCP-compatible client (Claude Desktop, OpenClaw, Cursor, etc.) can connect by adding this to the MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "plot": {
+      "url": "https://plot-mcp.qdp.qzz.io/mcp"
+    }
+  }
+}
+```
+
+Then ask your AI to plot something:
+
+> "Plot sin(x) from -2π to 2π with grid lines"
+
+The AI will call the `plot_png_link` tool and return a direct PNG URL.
+
+### Direct API Calls
+
+You can also call the MCP endpoint directly:
+
+```bash
+# Plot a function
+curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "plot_png_link",
+      "arguments": {
+        "expr": "sin(x)*exp(-0.1*x)",
+        "title": "Damped Sine Wave",
+        "x_min": -10,
+        "x_max": 30,
+        "grid": true
+      }
+    }
+  }'
+```
+
+Response:
+```json
+{
+  "result": {
+    "content": [{
+      "type": "text",
+      "text": "{\"ok\":true,\"data\":{\"png_url\":\"https://plot-mcp.qdp.qzz.io/png?d=...\"}}"
+    }]
+  }
+}
+```
+
+The `png_url` points to a rendered PNG image (1000×720, dark theme). URLs are compressed and may use short links for large payloads.
+
+### SVG Output
+
+For SVG instead of PNG, use the `/plot` endpoint:
+
+```bash
+# Decode the compressed payload from a png_url, then:
+curl "https://plot-mcp.qdp.qzz.io/plot?d=<compressed_payload>"
+```
+
+---
+
+## Self-Hosting
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) >= 18
+- A [Cloudflare](https://dash.cloudflare.com/) account (free tier works)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
+
+### 1. Clone and Install
+
+```bash
+git clone https://github.com/lingion/plot-mcp-worker.git
+cd plot-mcp-worker
+npm install
+```
+
+### 2. Create KV Namespace
+
+The service uses Cloudflare KV for two purposes:
+- **Short links**: PNG URLs that exceed 3,600 characters are stored as KV short links
+- **Font storage**: CJK font subset is loaded from KV at runtime (keeps the Worker bundle under CF's 3MB gzip limit)
+
+```bash
+npx wrangler kv namespace create SHORT_LINKS
+```
+
+Update `wrangler.toml` with the returned namespace ID:
+
+```toml
+[[kv_namespaces]]
+binding = "SHORT_LINKS"
+id = "<your-namespace-id>"
+```
+
+### 3. Upload CJK Font (Optional)
+
+For Chinese/Japanese/Korean text rendering, upload the font subset to KV:
+
+```bash
+# If you have the font subset file:
+npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
+  --namespace-id <your-namespace-id> \
+  --path path/to/font-subset.ttf \
+  --remote
+```
+
+Without this, CJK characters will render as boxes. ASCII and Latin text work without the font.
+
+### 4. Deploy
 
 ```bash
 npx wrangler deploy
 ```
 
-Requires Cloudflare Workers with a KV namespace for short-link PNG URLs.
+The Worker will be available at `https://<your-subdomain>.workers.dev/mcp`.
+
+### 5. Custom Domain (Optional)
+
+Add a route in `wrangler.toml`:
+
+```toml
+[[routes]]
+pattern = "plot-mcp.yourdomain.com/*"
+zone_name = "yourdomain.com"
+```
+
+### Configuration
+
+All configuration is in `wrangler.toml` and `src/constants.ts`:
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `DEFAULT_WIDTH` | 1000 | Canvas width (px) for math preset |
+| `DEFAULT_HEIGHT` | 720 | Canvas height (px) |
+| `DEFAULT_FONT_FAMILY` | `ArialUnicodeCN` | Font family for CJK |
+| `DEFAULT_BG` | `safe-dark` | Dark theme card |
+| `DEFAULT_GRID` | true | Show grid lines |
+| `DEFAULT_PALETTE` | 8 colors | Line color cycle |
+
+### Local Development
+
+```bash
+npx wrangler dev
+# Server starts at http://127.0.0.1:8787
+```
+
+---
+
+## Architecture
+
+```
+MCP Request (JSON-RPC)
+    │
+    ▼
+┌──────────────────┐
+│   Router (index)  │  Parse tool name → dispatch
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│   Plot Builder   │  normalize args → build spec
+│   (plot.ts)       │  detect trig, pi-mode, layout
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│   SVG Renderer   │  Generate SVG string
+│   (render.ts)     │  - Axes, ticks, grid, labels
+│                   │  - Data series (path, rect, etc.)
+│                   │  - Legend, annotations
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│  CJK Pathify     │  <text> → <path> for CJK chars
+│  (opentype.js)    │  Font loaded from KV, cached in memory
+└──────┬───────────┘
+       │
+       ▼
+┌──────────────────┐
+│  PNG Rasterizer  │  resvg-wasm SVG → PNG
+│                   │  Returns image/png response
+└──────────────────┘
+```
+
+Key design decisions:
+- **No headless browser**: SVG is built as a string, rasterized by resvg-wasm (Rust → WASM)
+- **Font embedding via path**: CJK glyphs are pre-converted to SVG paths, avoiding font-matching issues in the WASM runtime
+- **KV for large assets**: Font file (2.5MB) is stored in KV, loaded once per Worker isolate, cached in memory
+- **Bundle size**: ~1MB gzip (under CF free tier's 3MB limit)
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| [`@resvg/resvg-wasm`](https://github.com/nicbarker/resvg-js) | SVG → PNG rasterization (Rust via WASM) |
+| [`opentype.js`](https://opentype.js.org/) | CJK text-to-path conversion |
+| [`expr-eval`](https://github.com/silentmatt/expr-eval) | Math expression parser for `f(x)` plots |
+
+No other runtime dependencies. Total bundle: ~1MB gzipped.
+
+---
 
 ## License
 
