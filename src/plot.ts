@@ -736,6 +736,24 @@ function calculateBounds(series: NormalizedSeries[], annotations: PlotAnnotation
   let yMin = ys.length ? Math.min(...ys) : -1;
   let yMax = ys.length ? Math.max(...ys) : 1;
 
+  // Clamp extreme y-values for expression plots (e.g., tan(x) near asymptotes)
+  // Use IQR-based outlier detection: discard values beyond 3×IQR from quartiles
+  if (ys.length > 20) {
+    const sorted = [...ys].sort((a, b) => a - b);
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    const iqr = q3 - q1;
+    if (iqr > 0) {
+      const lowerBound = q1 - 3 * iqr;
+      const upperBound = q3 + 3 * iqr;
+      const clamped = ys.filter(v => v >= lowerBound && v <= upperBound);
+      if (clamped.length > sorted.length * 0.5) {
+        yMin = Math.min(...clamped);
+        yMax = Math.max(...clamped);
+      }
+    }
+  }
+
   // Bar-aware x-padding: bars have width, domain must extend beyond data center points
   const barSeries = series.filter((s) => s.type === "bar");
   if (barSeries.length > 0 && xs.length > 1) {

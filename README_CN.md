@@ -262,11 +262,11 @@ x = ±1 处的垂直渐近线标记。引擎渲染极点间隙时无伪影尖刺
   "x_min": 0, "x_max": 20,
   "title": "衰减正弦 + 全标注",
   "annotations": [
-    {"kind": "area", "x_min": 4.5, "x_max": 7.5, "label": "第1峰值区", "color": "#60a5fa", "opacity": 0.15},
-    {"kind": "area", "x_min": 11, "x_max": 14, "label": "第2峰值区", "color": "#34d399", "opacity": 0.15},
-    {"kind": "point", "x": 5.5, "y": 0.58, "label": "峰值 1", "color": "#fbbf24"},
-    {"kind": "point", "x": 12, "y": 0.30, "label": "峰值 2", "color": "#fbbf24"},
-    {"kind": "vertical_line", "x": 10, "label": "半衰期 ≈ 10", "color": "#f87171"}
+    {"kind": "area", "x_min": 0.8, "x_max": 2.2, "label": "第1峰值区", "color": "#60a5fa", "opacity": 0.12},
+    {"kind": "area", "x_min": 7.0, "x_max": 8.5, "label": "第2峰值区", "color": "#34d399", "opacity": 0.12},
+    {"kind": "point", "x": 1.471, "y": 0.859, "label": "峰值 1", "color": "#fbbf24"},
+    {"kind": "point", "x": 7.754, "y": 0.458, "label": "峰值 2", "color": "#fbbf24"},
+    {"kind": "vertical_line", "x": 6.93, "label": "半衰期 ≈ 6.93", "color": "#f87171"}
   ]
 }}
 ```

@@ -263,11 +263,11 @@ Area shading, point markers, vertical line, and text labels — all annotation t
   "x_min": 0, "x_max": 20,
   "title": "Decaying Sine with Annotations",
   "annotations": [
-    {"kind": "area", "x_min": 4.5, "x_max": 7.5, "label": "1st peak zone", "color": "#60a5fa", "opacity": 0.15},
-    {"kind": "area", "x_min": 11, "x_max": 14, "label": "2nd peak zone", "color": "#34d399", "opacity": 0.15},
-    {"kind": "point", "x": 5.5, "y": 0.58, "label": "Peak 1", "color": "#fbbf24"},
-    {"kind": "point", "x": 12, "y": 0.30, "label": "Peak 2", "color": "#fbbf24"},
-    {"kind": "vertical_line", "x": 10, "label": "Half-life ≈ 10", "color": "#f87171"}
+    {"kind": "area", "x_min": 0.8, "x_max": 2.2, "label": "1st peak zone", "color": "#60a5fa", "opacity": 0.12},
+    {"kind": "area", "x_min": 7.0, "x_max": 8.5, "label": "2nd peak zone", "color": "#34d399", "opacity": 0.12},
+    {"kind": "point", "x": 1.471, "y": 0.859, "label": "Peak 1", "color": "#fbbf24"},
+    {"kind": "point", "x": 7.754, "y": 0.458, "label": "Peak 2", "color": "#fbbf24"},
+    {"kind": "vertical_line", "x": 6.93, "label": "Half-life ≈ 6.93", "color": "#f87171"}
   ]
 }}
 ```

@@ -501,16 +501,25 @@ function firstSeriesAreaPath(spec: PlotSpec, xMin: number, xMax: number, plotX: 
 
 function renderAnnotations(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
   const annotations = spec.annotations || [];
+  // ── Annotation layout rules ──
+  // Area labels: inside the area, lower portion, small + transparent to avoid visual clutter
+  // Vertical line labels: at the bottom of the plot, offset right from the line
+  // Point labels: above-right of the point, with extra offset to clear area labels
+  // Rule: area label goes low, point label goes high, vertical line label goes bottom
+
   const areaLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "area" }> => item.kind === "area").map((item) => {
     const path = firstSeriesAreaPath(spec, item.x_min, item.x_max, plotX, plotY, plotWidth, plotHeight);
     if (!path) return "";
     const labelX = mapX((item.x_min + item.x_max) / 2, spec.xMin, spec.xMax, plotX, plotWidth);
-    const labelY = plotY + 28;
-    return `<g><path d="${path}" fill="${item.color}" opacity="${item.opacity}"/><text x="${labelX.toFixed(2)}" y="${labelY}" font-size="17" text-anchor="middle" fill="#e5e7eb" font-weight="600">${formulaText(item.label)}</text></g>`;
+    // Place area label in the lower 60% of the area — away from point labels that sit above
+    const labelY = plotY + plotHeight * 0.62;
+    return `<g><path d="${path}" fill="${item.color}" opacity="${item.opacity}"/><text x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="12" text-anchor="middle" fill="#e5e7eb" font-weight="500" opacity="0.7">${formulaText(item.label)}</text></g>`;
   }).join("");
   const lineLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "vertical_line" }> => item.kind === "vertical_line").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
-    return `<g><line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${item.color}" stroke-width="2.5" stroke-dasharray="8 7"/><text x="${(x + 8).toFixed(2)}" y="${plotY + 24}" font-size="14" fill="#e5e7eb" font-weight="600">${formulaText(item.label)}</text></g>`;
+    // Place label at the very bottom of the plot, left-aligned to the line
+    const labelY = plotY + plotHeight - 6;
+    return `<g><line x1="${x.toFixed(2)}" y1="${plotY}" x2="${x.toFixed(2)}" y2="${plotY + plotHeight}" stroke="${item.color}" stroke-width="2" stroke-dasharray="6 6" opacity="0.8"/><text x="${(x + 5).toFixed(2)}" y="${labelY.toFixed(2)}" font-size="12" fill="#e5e7eb" font-weight="500" opacity="0.8">${formulaText(item.label)}</text></g>`;
   }).join("");
   const pointLayer = annotations.filter((item): item is Extract<PlotAnnotation, { kind: "point" }> => item.kind === "point").map((item) => {
     const x = mapX(item.x, spec.xMin, spec.xMax, plotX, plotWidth);
