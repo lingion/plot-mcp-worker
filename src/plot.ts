@@ -502,6 +502,7 @@ export interface PlotSpec {
   xScale?: AxisScale;
   xMode?: "pi" | "numeric";  // "pi" formats x-ticks as π fractions
   aspect?: "auto" | "equal";  // "equal" = 1:1 coordinate unit ratio
+  layoutPreset?: "default" | "math";
   categories?: string[];
   barMode?: boolean;
   barStyle?: BarMode;  // "grouped" | "stacked" for multi-series bars
@@ -971,6 +972,17 @@ function detectPiMode(expr: string, xMin: number, xMax: number): { xMode?: "pi" 
   return {};
 }
 
+function resolveFunctionLayout(args: Record<string, unknown>): Pick<PlotSpec, "aspect" | "layoutPreset"> {
+  const rawAspect = String(args.aspect || "").trim().toLowerCase();
+  if (rawAspect === "equal") {
+    return { aspect: "equal", layoutPreset: "math" };
+  }
+  if (rawAspect === "auto") {
+    return { aspect: "auto", layoutPreset: "math" };
+  }
+  return { aspect: "auto", layoutPreset: "math" };
+}
+
 export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
   const expr = String(args.expr || "").trim();
   const xMin = parseNumber(args.x_min, -10);
@@ -982,6 +994,7 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     : buildPiecewiseSeries(args.pieces, parseInteger(args.points, 1000), xMin, xMax);
   // Auto-detect π mode for trig functions
   const { xMode } = detectPiMode(expr, xMin, xMax);
+  const layout = resolveFunctionLayout(args);
   return {
     title: safeTitle(args.title, expr ? "Function Plot" : "Piecewise Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -991,6 +1004,7 @@ export function buildSinglePlot(args: Record<string, unknown>): PlotSpec {
     annotations,
     mode: "xy",
     ...(xMode ? { xMode } : {}),
+    ...layout,
     ...calculateBounds(series, annotations),
   };
 }
@@ -1007,7 +1021,8 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
   const annotations = normalizeAnnotations(args.annotations);
   const series = exprs.map((expr, index) => makeFunctionSeries(expr, points, xMin, xMax, DEFAULT_PALETTE[index % DEFAULT_PALETTE.length], labels[index] || expr));
   // Auto-detect π mode for trig functions
-  const { xMode, aspect } = detectPiMode(exprs.join(","), xMin, xMax);
+  const { xMode } = detectPiMode(exprs.join(","), xMin, xMax);
+  const layout = resolveFunctionLayout(args);
   return {
     title: safeTitle(args.title, "Multi Function Plot"),
     xlabel: safeLabel(args.xlabel, "x"),
@@ -1017,6 +1032,7 @@ export function buildMultiPlot(args: Record<string, unknown>): PlotSpec {
     annotations,
     mode: "xy",
     ...(xMode ? { xMode } : {}),
+    ...layout,
     ...calculateBounds(series, annotations),
   };
 }

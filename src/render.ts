@@ -234,15 +234,30 @@ function plainLegendLabel(text: string): string {
   return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function renderLegend(spec: PlotSpec, width: number): string {
-  const unique = "ZZZZ_UNIQUE_SENTINEL_2043";
-  const sentinel = `<!-- LEGEND_SENTINEL:${unique} -->${spec.series.map((series, index) => {
-    const y = 90 + index * 28;
+function estimateLegendWidth(seriesNames: string[]): number {
+  const maxLabelLen = seriesNames.reduce((m, name) => Math.max(m, String(name || "").length), 0);
+  const PAD_X = 12;
+  const MARKER = 14;
+  const GAP = 8;
+  const labelW = maxLabelLen * 14 * 0.62;
+  return Math.ceil(PAD_X * 2 + MARKER + GAP + labelW);
+}
+
+function renderLegend(spec: PlotSpec, rect: { x: number; y: number; w: number; h: number }): string {
+  const PAD_X = 12;
+  const PAD_Y = 10;
+  const ITEM_H = 28;
+  const MARKER_W = 14;
+  const MARKER_H = 4;
+  const TEXT_GAP = 10;
+  const items = spec.series.map((series, index) => {
+    const y = rect.y + PAD_Y + index * ITEM_H;
     const rawLabel = series.name ?? `Series ${index + 1}`;
     const plain = plainLegendLabel(rawLabel);
-    return `<g><rect x="${width - 260}" y="${y - 8}" width="14" height="4" fill="${series.color}" rx="2"/><text x="${width - 238}" y="${y}" font-size="14" fill="#cbd5e1">${plain}</text></g>`;
-  }).join("")}`;
-  return sentinel;
+    const markerY = y + 7;
+    return `<g><rect x="${rect.x + PAD_X}" y="${markerY}" width="${MARKER_W}" height="${MARKER_H}" fill="${series.color}" rx="2"/><text x="${rect.x + PAD_X + MARKER_W + TEXT_GAP}" y="${y + 14}" font-size="14" fill="#cbd5e1">${plain}</text></g>`;
+  }).join("");
+  return `<g><rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="8"/>${items}</g>`;
 }
 
 function renderBarLayer(spec: PlotSpec, plotX: number, plotY: number, plotWidth: number, plotHeight: number): string {
@@ -391,12 +406,30 @@ function renderAnnotations(spec: PlotSpec, plotX: number, plotY: number, plotWid
 }
 
 export function renderPlotSvg(spec: PlotSpec): string {
-  const width = DEFAULT_WIDTH;
-  const height = DEFAULT_HEIGHT;
-  const plotX = 110;
-  const plotY = 110;
-  const plotWidth = width - 230;
-  const plotHeight = height - 220;
+  const isMathLayout = spec.layoutPreset === "math";
+  const width = isMathLayout ? 1000 : DEFAULT_WIDTH;
+  const height = isMathLayout ? 720 : DEFAULT_HEIGHT;
+  const cardX = 10;
+  const cardY = 10;
+  const cardW = width - 20;
+  const cardH = height - 20;
+  const titleY = 54;
+  const legendItems = spec.series.map((series) => series.name ?? "");
+  const legendW = spec.series.length > 0 ? estimateLegendWidth(legendItems) : 0;
+  const legendH = spec.series.length > 0 ? 20 + spec.series.length * 28 : 0;
+  const outerPadLeft = 100;
+  const outerPadRight = 36;
+  const outerPadTop = 100;
+  const outerPadBottom = 96;
+  const legendGap = spec.series.length > 0 ? 18 : 0;
+  const reserveLegend = spec.series.length > 0;
+  const plotX = outerPadLeft;
+  const plotY = outerPadTop;
+  const plotWidth = width - outerPadLeft - outerPadRight - (reserveLegend ? legendW + legendGap : 0);
+  const plotHeight = height - outerPadTop - outerPadBottom;
+  const legendRect = reserveLegend
+    ? { x: plotX + plotWidth + legendGap, y: plotY, w: legendW, h: Math.max(legendH, 44) }
+    : null;
 
   // Equal aspect: expand domain so pxPerX === pxPerY (never crop data)
   if (spec.aspect === "equal") {
@@ -436,11 +469,11 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const grid = spec.grid ? [
     ...xTicks.map((tick) => {
       const x = mapX(tick, spec.xMin, spec.xMax, plotX, plotWidth);
-      return `<line x1="${x}" y1="${plotY}" x2="${x}" y2="${plotY + plotHeight}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+      return `<line x1="${x}" y1="${plotY}" x2="${x}" y2="${plotY + plotHeight}" stroke="#334155" stroke-width="1" opacity="0.35"/>`;
     }),
     ...yTicks.map((tick) => {
       const y = mapY(tick, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="${DEFAULT_GRID}" stroke-width="1" opacity="0.6"/>`;
+      return `<line x1="${plotX}" y1="${y}" x2="${plotX + plotWidth}" y2="${y}" stroke="#334155" stroke-width="1" opacity="0.35"/>`;
     })
   ].join("") : "";
 
@@ -467,7 +500,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
       const cy = mapY(point.y, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4.5" fill="${series.color}" stroke="#0f172a" stroke-opacity="0.8" stroke-width="1.5"/>`;
     }).join("");
-    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.35" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const halo = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="#0f172a" stroke-opacity="0.3" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const line = series.type === "scatter" || !path ? "" : `<path d="${path}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
 
     // Error bars — uses normalizeErrorAt for full ErrorInput support + log skip
@@ -483,10 +516,9 @@ export function renderPlotSvg(spec: PlotSpec): string {
       const yVal = point.y;
       // Log skip: if lower bound <= 0, skip error bar but keep data point
       if (spec.yScale === "log" && yVal - minus <= 0) continue;
-      const cyMid = mapY(yVal, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       const cyTop = mapY(yVal + plus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
       const cyBot = mapY(yVal - minus, spec.yMin, spec.yMax, plotY, plotHeight, spec.yScale);
-      const capW = 10; // auto default for line/scatter
+      const capW = 10;
       errorSvg += `<g>
         <line x1="${cx.toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${cx.toFixed(2)}" y2="${cyBot.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>
         <line x1="${(cx - capW).toFixed(2)}" y1="${cyTop.toFixed(2)}" x2="${(cx + capW).toFixed(2)}" y2="${cyTop.toFixed(2)}" stroke="${series.color}" stroke-width="1.5"/>
@@ -494,7 +526,6 @@ export function renderPlotSvg(spec: PlotSpec): string {
       </g>`;
     }
 
-    // Bar series overlay (when mixed with line/scatter)
     let barOverlay = "";
     if (series.type === "bar") {
       const count = series.points.length;
@@ -515,6 +546,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
 
   const barLayer = renderBarLayer(spec, plotX, plotY, plotWidth, plotHeight);
   const annotationLayer = renderAnnotations(spec, plotX, plotY, plotWidth, plotHeight);
+  const legendSvg = legendRect ? renderLegend(spec, legendRect) : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -522,8 +554,8 @@ export function renderPlotSvg(spec: PlotSpec): string {
     text { font-family: ${DEFAULT_FONT_FAMILY}; }
   </style>
   <rect width="100%" height="100%" fill="transparent"/>
-  <rect x="10" y="10" width="${width - 20}" height="${height - 20}" rx="12" fill="#0f172a" fill-opacity="0.92"/>
-  <text x="${width / 2}" y="54" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#e5e7eb">${formulaText(spec.title)}</text>
+  <rect x="${cardX}" y="${cardY}" width="${cardW}" height="${cardH}" rx="12" fill="#0f172a" fill-opacity="0.92"/>
+  <text x="${width / 2}" y="${titleY}" text-anchor="middle" font-size="${DEFAULT_FONT_SIZE + 10}" font-weight="700" fill="#e5e7eb">${formulaText(spec.title)}</text>
   <defs><clipPath id="plot-clip"><rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}"/></clipPath></defs>
   <rect x="${plotX}" y="${plotY}" width="${plotWidth}" height="${plotHeight}" fill="#111827" fill-opacity="0.82" stroke="#334155" stroke-opacity="0.5" stroke-width="1" rx="4"/>
   ${grid}
@@ -535,9 +567,9 @@ export function renderPlotSvg(spec: PlotSpec): string {
   ${annotationLayer}
   ${seriesSvg}
   </g>
-  ${renderLegend(spec, width)}
-  <text x="${width / 2}" y="${height - 34}" text-anchor="middle" font-size="15" fill="#cbd5e1">${formulaText(spec.xlabel)}</text>
-  <text x="30" y="${height / 2}" text-anchor="middle" font-size="15" fill="#cbd5e1" transform="rotate(-90 30 ${height / 2})">${formulaText(spec.ylabel)}</text>
+  ${legendSvg}
+  <text x="${plotX + plotWidth / 2}" y="${height - 34}" text-anchor="middle" font-size="15" fill="#cbd5e1">${formulaText(spec.xlabel)}</text>
+  <text x="30" y="${plotY + plotHeight / 2}" text-anchor="middle" font-size="15" fill="#cbd5e1" transform="rotate(-90 30 ${plotY + plotHeight / 2})">${formulaText(spec.ylabel)}</text>
 </svg>`;
 }
 
