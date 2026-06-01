@@ -26,7 +26,9 @@ Add to your MCP client configuration (Claude Desktop, Cursor, etc.):
 }
 ```
 
-No API key needed. Your AI agent can now generate charts.
+No API key needed for the public endpoint. Your AI agent can now generate charts.
+
+> **Fair use:** The public endpoint is provided for experimentation and integration testing. For production use or higher-volume workloads, [self-hosting](#self-host-deploy-your-own) is recommended.
 
 ### Use via HTTP
 
@@ -127,6 +129,48 @@ Powered by [expr-eval](https://github.com/silentmatt/expr-eval):
 - Functions: `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `floor`, `ceil`, `round`
 - Constants: `pi`, `e`
 - Operators: `+`, `-`, `*`, `/`, `^` (power), `%` (mod)
+
+---
+
+## Response Shape
+
+### PNG link (plot, plot_multi, plot_series, multi_plot)
+
+```json
+{
+  "ok": true,
+  "png_url": "https://plot-mcp.qdp.qzz.io/png?d=...",
+  "warnings": []
+}
+```
+
+### Debug mode (debug: true)
+
+```json
+{
+  "ok": true,
+  "spec": { "xMin": -6.28, "xMax": 6.28, "yMin": -1.2, "yMax": 1.2 },
+  "warnings": [{"type": "bounds", "message": "y-range clamped via IQR outlier removal"}],
+  "debug": {
+    "stages": [
+      {"name": "raw", "input": 400, "output": 400},
+      {"name": "downsample", "method": "minmax", "input": 400, "output": 200}
+    ]
+  }
+}
+```
+
+### Error
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "transform",
+    "message": "normalize skipped due to error bars"
+  }
+}
+```
 
 ---
 
@@ -616,13 +660,21 @@ npx wrangler kv namespace create SHORT_LINKS
 
 # 4. Update wrangler.toml with your KV namespace ID
 
-# 5. Upload CJK font to KV (optional, for Chinese/Japanese/Korean support)
+# 5. Upload fonts to KV (for CJK support)
+#
+# CJK text is rendered via text-to-path (opentype.js), embedding font outlines
+# directly into SVG. You need a subset font stored in KV:
+#   - Use pyftsubset to extract GB2312 + punctuation + math symbols
+#   - Add --no-hinting to keep file under 3 MB (wrangler kv put silent-fails above that)
 npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
   --namespace-id YOUR_KV_ID --path subset.ttf --remote
 
-# Also upload a basic Latin font:
+# Latin text uses embedded font buffers in the Worker. If you want to override
+# the default Latin glyphs, upload a TTF with full ASCII coverage:
 npx wrangler kv key put "font:arial-sans" \
-  --namespace-id YOUR_KV_ID --path path/to/arial.ttf --remote
+  --namespace-id YOUR_KV_ID --path latin-font.ttf --remote
+
+# Note: You are responsible for font licensing when self-hosting.
 
 # 6. Deploy
 npx wrangler deploy
@@ -674,10 +726,10 @@ Client (AI agent)
 
 No headless browser. No external storage. Everything runs in a single Cloudflare Worker with KV.
 
-### Bundle Size
+### Bundle & Asset Sizes
 
-- Worker bundle: ~1 MB gzipped (well under CF free tier 3 MB limit)
-- CJK font: 2.5 MB, stored in KV (loaded on first request, cached in Worker memory)
+- Worker bundle: roughly ~1 MB gzipped (well within CF free tier 3 MB limit)
+- CJK font subset size depends on chosen font assets; stored in KV and cached in Worker memory
 
 ---
 

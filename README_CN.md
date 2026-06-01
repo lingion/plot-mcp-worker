@@ -28,6 +28,8 @@ SVG 渲染后通过 [resvg-wasm](https://github.com/nicbarker/resvg-js) 栅格�
 
 无需 API Key。你的 AI Agent 即可直接生成图表。
 
+> **合理使用：** 公共端点供实验和集成测试使用。生产环境或高流量场景建议[自部署](#自部署)。
+
 ### HTTP 调用
 
 ```bash
@@ -127,6 +129,48 @@ https://plot-mcp.qdp.qzz.io/plot?d=<base64url 编码参数>
 - 函数：`sin`、`cos`、`tan`、`exp`、`log`、`sqrt`、`abs`、`floor`、`ceil`、`round`
 - 常量：`pi`、`e`
 - 运算符：`+`、`-`、`*`、`/`、`^`（幂）、`%`（取模）
+
+---
+
+## 返回格式
+
+### PNG 链接（plot、plot_multi、plot_series、multi_plot）
+
+```json
+{
+  "ok": true,
+  "png_url": "https://plot-mcp.qdp.qzz.io/png?d=...",
+  "warnings": []
+}
+```
+
+### 调试模式（debug: true）
+
+```json
+{
+  "ok": true,
+  "spec": { "xMin": -6.28, "xMax": 6.28, "yMin": -1.2, "yMax": 1.2 },
+  "warnings": [{"type": "bounds", "message": "y-range clamped via IQR outlier removal"}],
+  "debug": {
+    "stages": [
+      {"name": "raw", "input": 400, "output": 400},
+      {"name": "downsample", "method": "minmax", "input": 400, "output": 200}
+    ]
+  }
+}
+```
+
+### 错误
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "transform",
+    "message": "normalize skipped due to error bars"
+  }
+}
+```
 
 ---
 
@@ -616,13 +660,21 @@ npx wrangler kv namespace create SHORT_LINKS
 
 # 4. 在 wrangler.toml 中填入 KV 命名空间 ID
 
-# 5. 上传中文字体到 KV（可选）
+# 5. 上传字体到 KV（中文支持）
+#
+# 中文文字通过 text-to-path（opentype.js）渲染，将字体轮廓直接嵌入 SVG。
+# 需要一个子集字体存储在 KV 中：
+#   - 使用 pyftsubset 提取 GB2312 + 标点 + 数学符号
+#   - 加 --no-hinting 保持文件在 3 MB 以下（wrangler kv put 超过 3 MB 会静默失败）
 npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
   --namespace-id YOUR_KV_ID --path subset.ttf --remote
 
-# 上传基础拉丁字体：
+# 拉丁文字使用 Worker 内嵌的字体缓冲区。如需覆盖默认拉丁字形，
+# 上传一个包含完整 ASCII 覆盖的 TTF：
 npx wrangler kv key put "font:arial-sans" \
-  --namespace-id YOUR_KV_ID --path path/to/arial.ttf --remote
+  --namespace-id YOUR_KV_ID --path latin-font.ttf --remote
+
+# 注意：自部署时字体授权由你自行负责。
 
 # 6. 部署
 npx wrangler deploy
@@ -674,10 +726,10 @@ zone_name = "yourdomain.com"
 
 无无头浏览器。无外部存储。一切运行在单个 Cloudflare Worker + KV 中。
 
-### 包体积
+### 包与资源大小
 
-- Worker 包：~1 MB gzipped（远低于 CF 免费版 3 MB 限制）
-- 中文字体：2.5 MB，存储在 KV 中（首次请求加载，缓存在 Worker 内存）
+- Worker 包：约 ~1 MB gzipped（远低于 CF 免费版 3 MB 限制）
+- 中文子集字体大小取决于所选字体资源；存储在 KV 中，缓存在 Worker 内存
 
 ---
 
