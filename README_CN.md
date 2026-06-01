@@ -6,7 +6,7 @@
 
 SVG 渲染后通过 [resvg-wasm](https://github.com/nicbarker/resvg-js) 栅格化为 PNG。中文文字（GB2312 + 标点 + 数学符号，7500+ 字形）通过 opentype.js 文字转路径管线直接嵌入 SVG，不依赖客户端字体。
 
-**在线端点：** `https://plot-mcp.qdp.qzz.io/mcp`
+部署后，你的端点地址为 `https://<your-worker>.<your-subdomain>.workers.dev/mcp`。
 
 ---
 
@@ -20,7 +20,7 @@ SVG 渲染后通过 [resvg-wasm](https://github.com/nicbarker/resvg-js) 栅格�
 {
   "mcpServers": {
     "plot": {
-      "url": "https://plot-mcp.qdp.qzz.io/mcp"
+      "url": "https://<your-worker>.<your-subdomain>.workers.dev/mcp"
     }
   }
 }
@@ -33,7 +33,7 @@ SVG 渲染后通过 [resvg-wasm](https://github.com/nicbarker/resvg-js) 栅格�
 ### HTTP 调用
 
 ```bash
-curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
+curl -X POST https://<your-worker>.<your-subdomain>.workers.dev/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0", "id": 1,
@@ -50,8 +50,8 @@ curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
 ### 直接 PNG/SVG URL
 
 ```
-https://plot-mcp.qdp.qzz.io/png?d=<base64url 编码参数>
-https://plot-mcp.qdp.qzz.io/plot?d=<base64url 编码参数>
+https://<your-worker>.<your-subdomain>.workers.dev/png?d=<base64url 编码参数>
+https://<your-worker>.<your-subdomain>.workers.dev/plot?d=<base64url 编码参数>
 ```
 
 通过 `plot_png_link` 或 `plot` 工具获取编码后的 URL。
@@ -139,7 +139,7 @@ https://plot-mcp.qdp.qzz.io/plot?d=<base64url 编码参数>
 ```json
 {
   "ok": true,
-  "png_url": "https://plot-mcp.qdp.qzz.io/png?d=...",
+  "png_url": "https://<your-worker>.<your-subdomain>.workers.dev/png?d=...",
   "warnings": []
 }
 ```

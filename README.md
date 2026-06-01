@@ -6,7 +6,7 @@ A serverless chart rendering engine on Cloudflare Workers. Expose an MCP server 
 
 Charts are rendered as SVG, then rasterized to PNG via [resvg-wasm](https://github.com/nicbarker/resvg-js). CJK text (GB2312 + punctuation + math symbols, 7500+ glyphs) is handled through an opentype.js text-to-path pipeline that embeds font outlines directly into the SVG, ensuring correct rendering regardless of client fonts.
 
-**Live endpoint:** `https://plot-mcp.qdp.qzz.io/mcp`
+After deployment, your endpoint will be available at `https://<your-worker>.<your-subdomain>.workers.dev/mcp`.
 
 ---
 
@@ -20,7 +20,7 @@ Add to your MCP client configuration (Claude Desktop, Cursor, etc.):
 {
   "mcpServers": {
     "plot": {
-      "url": "https://plot-mcp.qdp.qzz.io/mcp"
+      "url": "https://<your-worker>.<your-subdomain>.workers.dev/mcp"
     }
   }
 }
@@ -33,7 +33,7 @@ No API key needed for the public endpoint. Your AI agent can now generate charts
 ### Use via HTTP
 
 ```bash
-curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
+curl -X POST https://<your-worker>.<your-subdomain>.workers.dev/mcp \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0", "id": 1,
@@ -50,8 +50,8 @@ Returns JSON with a `png_url`. Pre-rendered PNG, 5-minute cache.
 ### Direct PNG/SVG URLs
 
 ```
-https://plot-mcp.qdp.qzz.io/png?d=<base64url-encoded-params>
-https://plot-mcp.qdp.qzz.io/plot?d=<base64url-encoded-params>
+https://<your-worker>.<your-subdomain>.workers.dev/png?d=<base64url-encoded-params>
+https://<your-worker>.<your-subdomain>.workers.dev/plot?d=<base64url-encoded-params>
 ```
 
 Use `plot_png_link` or `plot` tool to get properly encoded URLs.
@@ -139,7 +139,7 @@ Powered by [expr-eval](https://github.com/silentmatt/expr-eval):
 ```json
 {
   "ok": true,
-  "png_url": "https://plot-mcp.qdp.qzz.io/png?d=...",
+  "png_url": "https://<your-worker>.<your-subdomain>.workers.dev/png?d=...",
   "warnings": []
 }
 ```
