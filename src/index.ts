@@ -3316,6 +3316,7 @@ export default {
       }
     }
 
+
     if (req.method === "GET" && url.pathname === "/png") {
       try {
         const packed = url.searchParams.get("d") || "";

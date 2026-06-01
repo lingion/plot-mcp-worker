@@ -1,4 +1,5 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
+import opentype from "opentype.js";
 import wasmModule from "@resvg/resvg-wasm/index_bg.wasm";
 import { normalizeErrorAt, MultiPlotCell, MultiPlotResult, resolveAxisPolicy, PlotIntent, ResolvedAxisPolicy } from "./plot";
 import { DEFAULT_AXIS, DEFAULT_BG, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_GRID, DEFAULT_HEIGHT, DEFAULT_WIDTH, Env } from "./constants";
@@ -68,22 +69,86 @@ async function ensureResvgReady() {
 }
 
 // ── Font cache (loaded from KV on first use) ────────────────────────────────
-let fontCache: Uint8Array[] | null = null;
+export let fontCache: Uint8Array[] | null = null;
+export let cjkPathFontCache: any | null = null;
 
-async function loadFonts(env: Env): Promise<Uint8Array[]> {
+function exactArrayBuffer(buf: ArrayBuffer): ArrayBuffer {
+  return buf.slice(0);
+}
+
+export async function loadFonts(env: Env): Promise<Uint8Array[]> {
   if (fontCache) return fontCache;
   const kv = env.SHORT_LINKS;
-  const heitiBuf = await kv.get("font:heiti-sc-gb2312", "arrayBuffer");
+  const cnBuf = await kv.get("font:arial-unicode-cn-gb2312", "arrayBuffer");
   const arialBuf = await kv.get("font:arial-sans", "arrayBuffer");
   const fonts: Uint8Array[] = [];
-  if (heitiBuf) fonts.push(new Uint8Array(heitiBuf));
-  if (arialBuf) fonts.push(new Uint8Array(arialBuf));
-  if (fonts.length === 0) {
-    throw new Error(`No fonts loaded from KV (heiti=${heitiBuf ? heitiBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'})`);
+  if (cnBuf) {
+    const cnBytes = new Uint8Array(cnBuf);
+    fonts.push(cnBytes);
+    cjkPathFontCache = opentype.parse(exactArrayBuffer(cnBuf));
   }
-  console.log(`Fonts loaded: heiti=${heitiBuf ? heitiBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'}, total=${fonts.length}`);
+  if (arialBuf) fonts.push(new Uint8Array(arialBuf));
+  if (fonts.length === 0 || !cjkPathFontCache) {
+    throw new Error(`No CJK font loaded from KV (cn=${cnBuf ? cnBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'})`);
+  }
+  console.log(`Fonts loaded: cn=${cnBuf ? cnBuf.byteLength : 'null'}, arial=${arialBuf ? arialBuf.byteLength : 'null'}, total=${fonts.length}`);
   fontCache = fonts;
   return fontCache;
+}
+
+export async function loadCjkPathFont(env: Env): Promise<any> {
+  if (!cjkPathFontCache) await loadFonts(env);
+  return cjkPathFontCache;
+}
+
+function hasCjk(text: string): boolean {
+  return /[㐀-鿿豈-﫿]/.test(text);
+}
+
+function xmlUnescape(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function attrValue(attrs: string, name: string): string | undefined {
+  const re = new RegExp(`${name}="([^"]*)"`);
+  return re.exec(attrs)?.[1];
+}
+
+function measureText(font: any, text: string, fontSize: number): number {
+  let width = 0;
+  const scale = fontSize / font.unitsPerEm;
+  for (const ch of text) {
+    const glyph = font.charToGlyph(ch);
+    width += (glyph.advanceWidth || font.unitsPerEm * 0.5) * scale;
+  }
+  return width;
+}
+
+export async function pathifyCjkText(svg: string, env: Env): Promise<string> {
+  const font = await loadCjkPathFont(env);
+  return svg.replace(/<text([^>]*)>([\s\S]*?)<\/text>/g, (full, attrs, rawText) => {
+    if (rawText.includes("<tspan") || !hasCjk(rawText)) return full;
+    const text = xmlUnescape(rawText);
+    const fontSize = Number(attrValue(attrs, "font-size") || DEFAULT_FONT_SIZE);
+    let x = Number(attrValue(attrs, "x") || 0);
+    const y = Number(attrValue(attrs, "y") || 0);
+    const anchor = attrValue(attrs, "text-anchor") || "start";
+    const fill = attrValue(attrs, "fill") || "#000";
+    const opacity = attrValue(attrs, "opacity");
+    const transform = attrValue(attrs, "transform");
+    const width = measureText(font, text, fontSize);
+    if (anchor === "middle") x -= width / 2;
+    if (anchor === "end") x -= width;
+    const path = font.getPath(text, x, y, fontSize).toPathData(2);
+    const opacityAttr = opacity ? ` opacity="${opacity}"` : "";
+    const pathEl = `<path d="${path}" fill="${fill}"${opacityAttr}/>`;
+    return transform ? `<g transform="${transform}">${pathEl}</g>` : pathEl;
+  });
 }
 
 // ── Nice tick generation engine ──────────────────────────────────────────────
@@ -992,14 +1057,17 @@ export function renderSpecToSvg(spec: PlotSpec): string {
 export async function renderPngBase64(svg: string, env: Env): Promise<string> {
   await ensureResvgReady();
   const fontBuffers = await loadFonts(env);
-  const renderer = new Resvg(svg, {
+  console.log("renderPngResponse: calling pathifyCjkText");
+  const renderSvg = await pathifyCjkText(svg, env);
+  const renderer = new Resvg(renderSvg, {
     fitTo: { mode: "original" },
     background: "transparent",
     font: {
       fontBuffers,
-      defaultFontFamily: "Heiti SC",
-      sansSerifFamily: "Heiti SC",
-      serifFamily: "Heiti SC",
+      loadSystemFonts: false,
+      defaultFontFamily: "ArialUnicodeCN",
+      sansSerifFamily: "ArialUnicodeCN",
+      serifFamily: "ArialUnicodeCN",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
@@ -1011,14 +1079,16 @@ export async function renderPngBase64(svg: string, env: Env): Promise<string> {
 export async function renderPngResponse(svg: string, env: Env): Promise<Response> {
   await ensureResvgReady();
   const fontBuffers = await loadFonts(env);
-  const renderer = new Resvg(svg, {
+  const renderSvg = await pathifyCjkText(svg, env);
+  const renderer = new Resvg(renderSvg, {
     fitTo: { mode: "original" },
     background: "transparent",
     font: {
       fontBuffers,
-      defaultFontFamily: "Heiti SC",
-      sansSerifFamily: "Heiti SC",
-      serifFamily: "Heiti SC",
+      loadSystemFonts: false,
+      defaultFontFamily: "ArialUnicodeCN",
+      sansSerifFamily: "ArialUnicodeCN",
+      serifFamily: "ArialUnicodeCN",
       defaultFontSize: DEFAULT_FONT_SIZE,
     },
   });
