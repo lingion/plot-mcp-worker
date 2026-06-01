@@ -2,17 +2,122 @@
 
 [English](README.md)
 
-基于 Cloudflare Workers 的无服务器图表渲染引擎。通过 MCP 协议对外提供服务，任何 AI Agent 发一条 JSON 即可拿到 publication 级别的 PNG/SVG 图表——不需要无头浏览器、不需要文件存储、不需要服务器。
+一个运行在 Cloudflare Workers 上的无服务器图表渲染引擎。通过 MCP（Model Context Protocol）协议暴露端点，让任何 AI Agent 通过一条 JSON 调用即可生成出版级 PNG/SVG 图表——无需无头浏览器、无需服务器、无需存储桶。
 
-渲染管线：SVG 构造 → CJK 文字转路径（opentype.js）→ resvg-wasm 光栅化为 PNG。中文字体通过 opentype.js 的 text-to-path 方案内嵌字形轮廓到 SVG 中，完全不依赖客户端字体环境，覆盖 GB2312 全集 + 中文标点 + 数学符号共 7500+ 字符。
+图表以 SVG 渲染，再通过 [resvg-wasm](https://github.com/nicbarker/resvg-js) 光栅化为 PNG。中文文本（GB2312 + 标点 + 数学符号，7500+ 字形）通过 opentype.js 的文本转路径管线处理，将字体轮廓直接嵌入 SVG，确保在任何客户端上正确渲染。
 
-**线上地址：** `https://plot-mcp.qdp.qzz.io/mcp`
+**在线端点：** `https://plot-mcp.qdp.qzz.io/mcp`
+
+---
+
+## 快速开始
+
+### 在 MCP 客户端中使用
+
+将以下配置添加到你的 MCP 客户端（Claude Desktop、Cursor 等）：
+
+```json
+{
+  "mcpServers": {
+    "plot": {
+      "url": "https://plot-mcp.qdp.qzz.io/mcp"
+    }
+  }
+}
+```
+
+即可使用，无需 API Key。你的 AI Agent 现在可以生成图表了。
+
+### 通过 HTTP 调用
+
+```bash
+curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "plot_png_link",
+      "arguments": {"expr": "sin(x)", "title": "正弦函数"}
+    }
+  }'
+```
+
+返回 JSON 响应中的 `png_url`。该 URL 提供预渲染的 PNG，缓存 5 分钟。
+
+### 直接访问 PNG/SVG URL
+
+```
+https://plot-mcp.qdp.qzz.io/png?d=<base64url编码参数>
+https://plot-mcp.qdp.qzz.io/plot?d=<base64url编码参数>
+```
+
+使用 `plot_png_link` 或 `plot` 工具获取正确编码的 URL。
+
+---
+
+## 自部署
+
+### 前提条件
+
+- [Node.js](https://nodejs.org/) 20+
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)（`npm install -g wrangler`）
+- [Cloudflare](https://dash.cloudflare.com/) 账号（免费版即可）
+- Cloudflare Workers KV 命名空间（用于字体存储和短链 URL）
+
+### 步骤
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/lingion/plot-mcp-worker.git
+cd plot-mcp-worker
+
+# 2. 安装依赖
+npm install
+
+# 3. 创建 KV 命名空间
+npx wrangler kv namespace create SHORT_LINKS
+# 记下输出中的 id
+
+# 4. 更新 wrangler.toml 中的 KV 命名空间 ID
+# 编辑 [[kv_namespaces]] 下的 id 字段
+
+# 5. 上传中文字体到 KV（可选，用于中日韩文本支持）
+# 子集化一个 TTF 字体（如 Arial Unicode MS）到 GB2312 + 标点：
+#   pyftsubset --no-hinting --unicodes-file=your-unicode-list.txt ArialUnicode.ttf \
+#     --output-file=subset.ttf
+npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
+  --namespace-id 你的KV_ID --path subset.ttf --remote
+
+# 同时上传基础拉丁字体：
+npx wrangler kv key put "font:arial-sans" \
+  --namespace-id 你的KV_ID --path path/to/arial.ttf --remote
+
+# 6. 部署
+npx wrangler deploy
+```
+
+你的端点将在 `https://<your-worker>.<your-subdomain>.workers.dev/mcp` 上线。
+
+### 自定义域名（可选）
+
+在 `wrangler.toml` 中添加路由：
+
+```toml
+[[routes]]
+pattern = "plot.yourdomain.com/*"
+zone_name = "yourdomain.com"
+```
+
+然后添加 DNS 记录指向你的 Worker。
 
 ---
 
 ## Showcase
 
 ### 1. 三角函数组合
+
+sin、cos 及其合成——自动检测 π 模式 x 轴、三角 y 轴特殊刻度 `[-1, -0.5, 0, 0.5, 1]`、自动外置图例。
 
 ![三角函数组合](docs/showcase/cn/01_trig_composition.png)
 
@@ -25,7 +130,11 @@
 }}
 ```
 
+---
+
 ### 2. 方波——傅里叶级数逼近
+
+逐步叠加奇次谐波逼近方波。4 条曲线、自动 π 轴、数学预设布局。
 
 ![傅里叶逼近](docs/showcase/cn/02_fourier_approx.png)
 
@@ -38,7 +147,11 @@
 }}
 ```
 
+---
+
 ### 3. tan(x)——不连续检测
+
+自动渐近线断裂检测——无尖刺、无连接 ±∞ 的垂直线。引擎检测符号翻转 + 大 Δy 并断开路径。
 
 ![tan 不连续](docs/showcase/cn/03_tan_discontinuity.png)
 
@@ -50,7 +163,11 @@
 }}
 ```
 
+---
+
 ### 4. sinc 函数: sin(x)/x
+
+经典信号处理函数，在 x=0 处自动处理可去奇点。
 
 ![sinc 函数](docs/showcase/cn/04_sinc_function.png)
 
@@ -62,7 +179,11 @@
 }}
 ```
 
+---
+
 ### 5. 1/(x²-1)——有理函数渐近线标注
+
+x = ±1 处的垂直渐近线标记。引擎渲染极点间隙时无伪影尖刺。
 
 ![有理函数渐近线](docs/showcase/cn/05_rational_asymptotes.png)
 
@@ -73,374 +194,427 @@
   "title": "1/(x²-1)——有理函数",
   "annotations": [
     {"kind": "vertical_line", "x": -1, "label": "x = -1", "color": "#f87171"},
-    {"kind": "vertical_line", "x": 1, "label": "x = 1", "color": "#f87171"}
+    {"kind": "vertical_line", "x":  1, "label": "x = 1",  "color": "#f87171"}
   ]
 }}
 ```
 
+---
+
 ### 6. 阻尼振荡: e^(-0.3x)·sin(2x)
+
+指数衰减 × 三角函数——自动 nice 刻度，15 个单位范围内平滑渲染。
 
 ![阻尼振荡](docs/showcase/cn/06_damped_oscillation.png)
 
+```json
+{"tool": "plot_png_link", "arguments": {
+  "expr": "exp(-0.3*x)*sin(2*x)",
+  "x_min": 0, "x_max": 15,
+  "title": "阻尼振荡: e^(-0.3x)·sin(2x)"
+}}
+```
+
+---
+
 ### 7. |sin(x)|·cos(x)——整流乘积
+
+绝对值复合——符号变化的非平凡波形。
 
 ![整流乘积](docs/showcase/cn/07_absolute_value.png)
 
+```json
+{"tool": "plot_png_link", "arguments": {
+  "expr": "abs(sin(x))*cos(x)",
+  "x_min": -10, "x_max": 10,
+  "title": "|sin(x)|·cos(x)——整流乘积"
+}}
+```
+
+---
+
 ### 8. 高斯混合模型
+
+三个不同均值和方差的高斯分布。
 
 ![高斯混合](docs/showcase/cn/08_gaussian_mixture.png)
 
+```json
+{"tool": "plot_multi", "arguments": {
+  "exprs": ["exp(-x*x/2)/sqrt(2*3.14159)", "0.6*exp(-(x-2)*(x-2)/1.5)/sqrt(2*3.14159*1.5)", "0.4*exp(-(x+1.5)*(x+1.5)/0.8)/sqrt(2*3.14159*0.8)"],
+  "labels": ["N(0,1)", "0.6·N(2,1.5)", "0.4·N(-1.5,0.8)"],
+  "x_min": -6, "x_max": 8,
+  "title": "高斯混合模型"
+}}
+```
+
+---
+
 ### 9. 衰减正弦 + 全标注套件
+
+区域着色、点标记、垂直线、文本标签——一张图内展示所有标注类型。
 
 ![标注峰值](docs/showcase/cn/09_annotated_peaks.png)
 
+```json
+{"tool": "plot_png_link", "arguments": {
+  "expr": "sin(x)*exp(-0.1*x)",
+  "x_min": 0, "x_max": 20,
+  "title": "衰减正弦 + 全标注",
+  "annotations": [
+    {"kind": "area", "x_min": 4.5, "x_max": 7.5, "label": "第1峰值区", "color": "#60a5fa", "opacity": 0.15},
+    {"kind": "area", "x_min": 11, "x_max": 14, "label": "第2峰值区", "color": "#34d399", "opacity": 0.15},
+    {"kind": "point", "x": 5.5, "y": 0.58, "label": "峰值 1", "color": "#fbbf24"},
+    {"kind": "point", "x": 12, "y": 0.30, "label": "峰值 2", "color": "#fbbf24"},
+    {"kind": "vertical_line", "x": 10, "label": "半衰期 ≈ 10", "color": "#f87171"}
+  ]
+}}
+```
+
+---
+
 ### 10. Q1-Q4 营收预测 vs 实际
+
+预测 vs 实际 vs 目标——散点图上的对称误差条、外置清晰图例。
 
 ![业务误差条](docs/showcase/cn/10_business_error_bars.png)
 
-### 11. 性能基准测试（分组柱状 + 误差条）
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "Q1-Q4 营收预测 vs 实际",
+  "xlabel": "季度", "ylabel": "营收 (百万美元)",
+  "series": [
+    {"name": "预测", "type": "line+scatter", "points": [[1,120],[2,185],[3,310],[4,490]], "color": "#60a5fa", "error": [8,12,20,35]},
+    {"name": "实际", "type": "line+scatter", "points": [[1,135],[2,178],[3,345],[4,510]], "color": "#f87171", "error": [5,10,15,25]},
+    {"name": "目标", "type": "line",         "points": [[1,150],[2,200],[3,300],[4,450]], "color": "#34d399"}
+  ]
+}}
+```
+
+---
+
+### 11. 性能基准测试
+
+3 个模型 × 4 项测试——每根柱的误差条、自动分类标签。
 
 ![分组柱状](docs/showcase/cn/11_grouped_bars.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "性能基准测试",
+  "xlabel": "测试", "ylabel": "分数",
+  "bar_style": "grouped",
+  "series": [
+    {"name": "模型 A", "type": "bar", "points": [[0,92],[1,78],[2,85],[3,95]], "group": "g", "color": "#60a5fa", "error": [2,3,2,1]},
+    {"name": "模型 B", "type": "bar", "points": [[0,88],[1,82],[2,91],[3,87]], "group": "g", "color": "#f87171", "error": [3,2,1,2]},
+    {"name": "模型 C", "type": "bar", "points": [[0,95],[1,74],[2,79],[3,90]], "group": "g", "color": "#34d399", "error": [1,4,3,2]}
+  ]
+}}
+```
+
+---
+
 ### 12. 云基础设施成本——堆叠
+
+计算、存储、网络按月堆叠。
 
 ![堆叠柱状](docs/showcase/cn/12_stacked_bars.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "云基础设施成本——堆叠",
+  "xlabel": "月份", "ylabel": "成本 ($)",
+  "bar_style": "stacked",
+  "series": [
+    {"name": "计算", "type": "bar", "points": [[1,3200],[2,3500],[3,4100],[4,4800],[5,5200],[6,5600]], "group": "g", "color": "#60a5fa"},
+    {"name": "存储", "type": "bar", "points": [[1,1200],[2,1400],[3,1600],[4,1900],[5,2200],[6,2500]], "group": "g", "color": "#34d399"},
+    {"name": "网络", "type": "bar", "points": [[1,800],[2,900],[3,1100],[4,1300],[5,1500],[6,1800]], "group": "g", "color": "#fbbf24"}
+  ]
+}}
+```
+
+---
+
 ### 13. AI 研究团队时间分配
+
+带百分比标签的饼图。
 
 ![饼图](docs/showcase/cn/13_pie_chart.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "AI 研究团队时间分配",
+  "series": [{"type": "pie", "name": "team", "labels": ["训练","数据准备","评估","基础设施","会议","研究"], "values": [35,20,15,12,8,10]}]
+}}
+```
+
+---
+
 ### 14. 响应延迟分布
+
+自动分箱的直方图。
 
 ![直方图](docs/showcase/cn/14_histogram.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "响应延迟分布",
+  "xlabel": "延迟", "ylabel": "频次",
+  "series": [{"type": "hist", "name": "latency", "data": [12,15,18,22,25,28,30,32,35,38,41,45,48,52,55,58,62,65,68,72,75,78,82,85,88,92,95,98,102,105,108,112,115,118,122,125,128,132,135,138,142,145,148,152,155,158,162], "bins": 10}]
+}}
+```
+
+---
+
 ### 15. 模型精度跨数据集对比
+
+箱线图——中位数、四分位、须线、离群值。
 
 ![箱线图](docs/showcase/cn/15_box_plot.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "模型精度跨数据集对比",
+  "ylabel": "精度 (%)",
+  "series": [
+    {"type": "box", "name": "GPT-4",  "data": [82,85,87,89,90,91,92,93,94,95,97]},
+    {"type": "box", "name": "Claude", "data": [80,84,86,88,90,91,92,93,95,96,98]},
+    {"type": "box", "name": "Gemini", "data": [75,79,83,85,87,89,90,92,93,94,96]}
+  ]
+}}
+```
+
+---
+
 ### 16. 训练损失（对数坐标）
+
+10 个 epoch 的训练损失——y 轴自动切换为对数刻度格式。
 
 ![对数坐标](docs/showcase/cn/16_log_scale.png)
 
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "训练损失（对数坐标）",
+  "xlabel": "Epoch", "ylabel": "Loss",
+  "y_scale": "log",
+  "series": [{"name": "Loss", "type": "line", "points": [[1,2.5],[2,1.8],[3,0.95],[4,0.42],[5,0.18],[6,0.072],[7,0.031],[8,0.014],[9,0.006],[10,0.003]], "color": "#a78bfa"}]
+}}
+```
+
+---
+
 ### 17. 实验测量——非对称不确定度
 
-![散点](docs/showcase/cn/17_scatter_asymmetric.png)
+不确定度不对称的实验数据——`error: { plus: [...], minus: [...] }`。
+
+![非对称误差散点](docs/showcase/cn/17_scatter_asymmetric.png)
+
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "实验测量——非对称不确定度",
+  "xlabel": "温度 (K)", "ylabel": "电导率 (S/m)",
+  "series": [{"name": "测量值", "type": "scatter", "points": [[200,0.12],[250,0.28],[300,0.45],[350,0.67],[400,0.88],[450,1.05],[500,1.22]], "color": "#f472b6", "error": {"plus": [0.02,0.03,0.05,0.08,0.06,0.04,0.03], "minus": [0.01,0.02,0.03,0.05,0.04,0.03,0.02]}}]
+}}
+```
+
+---
 
 ### 18. 变换管线：原始 → 平滑 → 归一化
 
+同一组噪声数据的三种视图：原始散点、平滑折线（窗口=3）、min-max 归一化。
+
 ![变换管线](docs/showcase/cn/18_transform_pipeline.png)
 
-### 19. 函数画廊（2×2 子图）
+```json
+{"tool": "plot_series", "arguments": {
+  "title": "变换管线：原始 → 平滑 → 归一化",
+  "xlabel": "样本", "ylabel": "值",
+  "series": [
+    {"name": "原始",   "type": "scatter", "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#475569"},
+    {"name": "平滑",   "type": "line",    "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#60a5fa", "transforms": [{"type": "smooth", "window": 3}]},
+    {"name": "归一化", "type": "line",    "points": [[0,2.1],[1,8.3],[2,4.5],[3,12.1],[4,6.2],[5,15.8],[6,9.1],[7,3.2],[8,11.5],[9,7.8],[10,14.2],[11,5.5]], "color": "#f472b6", "transforms": [{"type": "normalize", "method": "minmax"}]}
+  ]
+}}
+```
 
-![子图](docs/showcase/cn/19_subplot_2x2.png)
+---
 
-### 20. ∫₀³ (x² - x + 1) dx 定积分教学
+### 19. 函数画廊
+
+2×2 子图网格——四种不同图表类型，共享图例外置。
+
+![子图 2×2](docs/showcase/cn/19_subplot_2x2.png)
+
+```json
+{"tool": "multi_plot", "arguments": {
+  "title": "函数画廊",
+  "rows": 2, "cols": 2,
+  "plots": [
+    {"row": 0, "col": 0, "title": "sin(x)",    "series": [{"type": "line",    "name": "sin(x)",   "points": [[-3.14,0],[-1.57,-1],[0,0],[1.57,1],[3.14,0]],  "color": "#60a5fa"}]},
+    {"row": 0, "col": 1, "title": "x²",         "series": [{"type": "line",    "name": "x²",       "points": [[-3,9],[-2,4],[-1,1],[0,0],[1,1],[2,4],[3,9]],   "color": "#f87171"}]},
+    {"row": 1, "col": 0, "title": "exp(-x)",    "series": [{"type": "line",    "name": "exp(-x)",  "points": [[-2,7.39],[-1,2.72],[0,1],[1,0.37],[2,0.14]],    "color": "#34d399"}]},
+    {"row": 1, "col": 1, "title": "log(x)",     "series": [{"type": "scatter", "name": "log(x)",   "points": [[0.1,-2.3],[0.5,-0.69],[1,0],[2,0.69],[5,1.6]], "color": "#fbbf24"}]}
+  ]
+}}
+```
+
+---
+
+### 20. ∫₀³ (x² - x + 1) dx
+
+内置教学模块：积分区域着色、公式、上下界标注。
 
 ![定积分教学](docs/showcase/cn/20_teaching_integral.png)
 
+```json
+{"tool": "teaching", "arguments": {
+  "topic": "definite_integral",
+  "params": {"expr": "x^2 - x + 1", "a": 0, "b": 3},
+  "title": "∫₀³ (x² - x + 1) dx"
+}}
+```
+
 ---
 
-## 功能概览
+## 功能特性
 
 ### 图表类型
 
-| 类型 | 说明 |
-|------|------|
-| 函数图 | 输入表达式 `f(x)`，自动检测三角函数/π轴模式、处理不连续点 |
-| 多函数叠加 | 多条 `f(x)` 曲线在同一图上，自动生成图例 |
-| 散点/折线 | 传入 `(x, y)` 数据数组，支持误差条 |
-| 柱状图 | 普通/分组/堆叠柱状图，支持误差条 |
-| 直方图 | 自动分箱 |
-| 箱线图 | 分组分布对比，含四分位、中位数、离群点 |
-| 饼图 | 标签 + 百分比 |
-| 子图网格 | M×N 布局，支持共享坐标轴 |
+| 类型 | 工具 | 输入 |
+|------|------|------|
+| **函数图** | `plot_png_link` | 表达式字符串（`"sin(x)"`、`"1/(x^2-1)"`） |
+| **多函数** | `plot_multi` | 表达式数组 |
+| **数据系列** | `plot_series` | 显式 `[[x,y], ...]` 数据点 |
+| **柱状图** | `plot_series` 或 `plot_bar` | 分组或堆叠 |
+| **直方图** | `plot_series` | 原始数据数组 + 分箱数 |
+| **箱线图** | `plot_series` | 每组原始数据 |
+| **饼图** | `plot_series` | 标签 + 值 |
+| **子图网格** | `multi_plot` | M×N 网格，任意图表类型 |
+| **教学模板** | `teaching` | 定积分、导数、傅里叶级数、抛体运动等 |
+| **示意图** | `diagram` | 受力图、电路图、韦恩图 |
 
 ### 坐标轴引擎
 
-采用意图驱动的架构：调用方（通常是 AI）只传递语义意图，引擎负责计算实际的刻度值、标签和范围。
+- **Nice 刻度**：从 1, 2, 2.5, 5 × 10ⁿ 中选择步长——不会出现 0.72 或 1.2 这样难看的值
+- **自动 π 模式**：三角函数自动获得 π 格式 x 轴（`-2π, -π, 0, π, 2π`）
+- **三角 y 轴特殊刻度**：sin/cos 获得 `[-1, -0.5, 0, 0.5, 1]` 而非任意小数
+- **零对称**：数学风格的函数图默认 y 轴围绕零对称
+- **对数刻度**：设置 `y_scale: "log"` 启用对数 y 轴
+- **不连续检测**：符号翻转 + 大 Δy → 路径断开，渐近线处无垂直尖刺
 
-- **Nice ticks**：步长从 `{1, 2, 2.5, 5} × 10ⁿ` 中选取——不会出现 0.72、1.3 这种丑数
-- **自动 π 轴**：三角函数自动获得 `−2π, −π, 0, π, 2π` 标签
-- **三角 y 轴特殊处理**：sin/cos 自动用 `[-1, -0.5, 0, 0.5, 1]` 刻度
-- **零点对称**：函数图默认 y 轴以零为中心
-- **不连续检测**：符号翻转 + 大 Δy → 自动断开路径（tan(x)、1/x 等不会出现竖直尖刺）
+### 标注
 
-### 中文渲染
-
-CJK 文本通过 opentype.js 的 text-to-path 方案渲染：
-
-1. SVG 正常生成 `<text>` 元素
-2. 光栅化前，`pathifyCjkText()` 找到所有含 CJK 字符的 `<text>`
-3. 用 opentype.js `font.getPath()` 转换为 `<path>`，将字形轮廓直接嵌入 SVG
-4. resvg 渲染 path 版 SVG——完全不需要字体匹配
-
-字体子集覆盖 **7,556 字符**：完整 GB2312（6,763 CJK + 符号）、ASCII、全角标点（·——、。，：；！？""''【】《》…）、数学符号（αβγπ∫∑√∞≤≥±）。
-
-### 数据变换管线
-
-渲染前可对数据系列执行变换：
-
-| 变换 | 说明 |
-|------|------|
-| `normalize` | Min-max / z-score / max-abs 归一化 |
-| `smooth` | 移动平均，可配置窗口大小 |
-| `filter` | 按 x 或 y 范围过滤 |
-| `rolling` | 滚动统计（均值、中位数、标准差） |
-| `downsample` | 通过 min-max 或 LTTB 降采样 |
-
-### 标注系统
-
-- **竖直线 + 标签**（渐近线、阈值线）
-- **点标记 + 文字**（峰值、零点、事件）
-- **阴影区域 + 标签**（关注区域）
-- **任意坐标文字标签**
-
-### MCP 工具列表
-
-通过 MCP 协议（HTTP POST 上的 JSON-RPC）暴露以下工具：
-
-#### 绘图
-
-| 工具名 | 说明 |
-|--------|------|
-| `plot` / `plot_png_link` | 单表达式绘图——自动 π轴、三角检测、不连续处理 |
-| `plot_multi` / `plot_multi_png_link` | 多表达式叠加 |
-| `plot_series` / `plot_series_png_link` | 自定义数据数组——散点/柱状/直方/箱线/饼 + 误差条 |
-| `plot_bar` / `plot_bar_json` | 柱状图快捷方式 |
-| `multi_plot` | M×N 子图网格 |
-
-#### 示意图
-
-| 工具名 | 说明 |
-|--------|------|
-| `force_diagram_link` | 受力分析图 |
-| `force_analysis_link` | 带坐标轴、分量、合力的力学分析 |
-| `force_analysis_template_link` | 预设力学模板（斜面、悬挂体等） |
-| `circuit_diagram_link` | 电路原理图 |
-| `circuit_template_link` | 预设电路模板（串联、并联等） |
-| `venn_diagram_link` | 二集/三集韦恩图 |
-| `c_memory_diagram_link` | C 语言内存布局/指针示意图 |
-| `shape3d_link` | 交互式 3D 几何体查看器 |
-
-#### 教学
-
-| 工具名 | 说明 |
-|--------|------|
-| `teaching_template` | 单幅教学可视化（定积分、切线、抛体运动、简谐运动等） |
-| `teaching_sequence` | 多幅协调教学图序列 |
-
-#### 数据分析
-
-| 工具名 | 说明 |
-|--------|------|
-| `analysis` | 统计操作：`describe`（描述统计）、`corr`（相关矩阵）、`groupby`（分组聚合） |
-
----
-
-## 使用方式
-
-### 接入 MCP 客户端
-
-在任何 MCP 兼容客户端（Claude Desktop、OpenClaw、Cursor 等）中添加配置：
+为图表添加视觉上下文：
 
 ```json
-{
-  "mcpServers": {
-    "plot": {
-      "url": "https://plot-mcp.qdp.qzz.io/mcp"
-    }
-  }
-}
+"annotations": [
+  {"kind": "vertical_line", "x": 3.14, "label": "π", "color": "#f87171"},
+  {"kind": "point", "x": 5.5, "y": 0.58, "label": "峰值", "color": "#fbbf24"},
+  {"kind": "area", "x_min": 4, "x_max": 7, "label": "区域", "color": "#60a5fa", "opacity": 0.15}
+]
 ```
 
-然后直接对 AI 说：
+### 误差条
 
-> "画一个 sin(x)，范围 -2π 到 2π，带网格"
+支持三种格式：
 
-AI 会调用 `plot_png_link` 工具并返回 PNG 直链。
-
-### 直接调用 API
-
-不通过 AI，直接 HTTP 请求：
-
-```bash
-curl -X POST https://plot-mcp.qdp.qzz.io/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "plot_png_link",
-      "arguments": {
-        "expr": "sin(x)*exp(-0.1*x)",
-        "title": "阻尼正弦波",
-        "x_min": -10,
-        "x_max": 30,
-        "grid": true
-      }
-    }
-  }'
+```json
+"error": [2, 3, 2, 1]                          // 每点对称
+"error": 5                                      // 全局常数
+"error": {"plus": [0.02,0.03], "minus": [0.01,0.02]}  // 非对称
 ```
 
-返回值中的 `png_url` 指向渲染好的 PNG 图片（1000×720，暗色主题）。URL 使用压缩编码，大 payload 会自动使用短链接。
+### 数据变换
 
-### 获取 SVG
+数据系列管线变换：
 
-如果需要 SVG 格式（可编辑、可缩放），将 `png_url` 中的 `/png` 换成 `/plot`：
-
-```bash
-curl "https://plot-mcp.qdp.qzz.io/plot?d=<压缩payload>"
+```json
+"transforms": [
+  {"type": "smooth", "window": 5},
+  {"type": "normalize", "method": "minmax"},
+  {"type": "normalize", "method": "zscore"},
+  {"type": "rolling_avg", "window": 3}
+]
 ```
 
----
+### 视觉设计
 
-## 自部署
+- **默认暗色主题**：`#0f172a` 卡片背景、`#111827` 绘图区域、`#334155` 网格
+- **图例外置**：右侧预留空间，永不遮挡数据
+- **画布预设**：数学布局 (1000×720) 用于函数图、报告布局 (1200×720) 用于数据图表
+- **中文支持**：7500+ 字形（GB2312 + 标点 + 数学符号），通过文本转路径管线渲染
+- **调色板**：`#60a5fa, #f87171, #34d399, #fbbf24, #a78bfa, #22d3ee, #fb923c, #f472b6`
 
-### 前置条件
+### 表达式语法
 
-- [Node.js](https://nodejs.org/) >= 18
-- [Cloudflare](https://dash.cloudflare.com/) 账号（免费版即可）
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)（`npm install -g wrangler`）
+基于 [expr-eval](https://github.com/silentmatt/expr-eval)：
 
-### 1. 克隆并安装
-
-```bash
-git clone https://github.com/lingion/plot-mcp-worker.git
-cd plot-mcp-worker
-npm install
-```
-
-### 2. 创建 KV 命名空间
-
-服务使用 Cloudflare KV 存储两类数据：
-- **短链接**：PNG URL 超过 3,600 字符时，自动存为 KV 短链接
-- **字体文件**：CJK 字体子集运行时从 KV 加载（让 Worker bundle 保持在 CF 免费版 3MB gzip 限制内）
-
-```bash
-npx wrangler kv namespace create SHORT_LINKS
-```
-
-将返回的命名空间 ID 填入 `wrangler.toml`：
-
-```toml
-[[kv_namespaces]]
-binding = "SHORT_LINKS"
-id = "<你的命名空间ID>"
-```
-
-### 3. 上传中文字体（可选）
-
-如果需要中文渲染，上传字体子集到 KV：
-
-```bash
-npx wrangler kv key put "font:arial-unicode-cn-gb2312" \
-  --namespace-id <你的命名空间ID> \
-  --path 字体子集.ttf \
-  --remote
-```
-
-不上传也能用——ASCII 和拉丁文字正常显示，但中文会显示为方框。
-
-字体子集需要自己从 Arial Unicode MS 或其他支持中文的 TTF 字体中提取。推荐使用 [fonttools](https://github.com/fonttools/fonttools) 的 `pyftsubset` 工具，目标字符集：GB2312 + 常用中文标点 + 数学符号。
-
-### 4. 部署
-
-```bash
-npx wrangler deploy
-```
-
-Worker 部署在 `https://<你的子域名>.workers.dev/mcp`。
-
-### 5. 绑定自定义域名（可选）
-
-在 `wrangler.toml` 中添加路由：
-
-```toml
-[[routes]]
-pattern = "plot-mcp.yourdomain.com/*"
-zone_name = "yourdomain.com"
-```
-
-### 配置项
-
-主要配置在 `wrangler.toml` 和 `src/constants.ts` 中：
-
-| 常量 | 默认值 | 说明 |
-|------|--------|------|
-| `DEFAULT_WIDTH` | 1000 | 画布宽度（像素，数学预设） |
-| `DEFAULT_HEIGHT` | 720 | 画布高度（像素） |
-| `DEFAULT_FONT_FAMILY` | `ArialUnicodeCN` | CJK 字体族 |
-| `DEFAULT_BG` | `safe-dark` | 暗色主题 |
-| `DEFAULT_GRID` | true | 显示网格线 |
-| `DEFAULT_PALETTE` | 8 色 | 折线颜色循环 |
-
-### 本地开发
-
-```bash
-npx wrangler dev
-# 启动在 http://127.0.0.1:8787
-```
+- 函数：`sin`、`cos`、`tan`、`exp`、`log`、`sqrt`、`abs`、`floor`、`ceil`、`round`
+- 常量：`pi`、`e`
+- 运算符：`+`、`-`、`*`、`/`、`^`（幂）、`%`（取模）
+- 示例：`sin(x)`、`exp(-0.3*x)*cos(2*x)`、`1/(x^2-1)`、`abs(sin(x))*cos(x)`
 
 ---
 
 ## 架构
 
 ```
-MCP 请求 (JSON-RPC)
+客户端 (AI Agent)
     │
     ▼
-┌──────────────────┐
-│   路由层 (index)   │  解析工具名 → 分发
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│   图表构建器       │  标准化参数 → 构建 spec
-│   (plot.ts)       │  检测三角函数、π轴模式、布局
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│   SVG 渲染器       │  生成 SVG 字符串
-│   (render.ts)     │  - 坐标轴、刻度、网格、标签
-│                   │  - 数据系列（路径、矩形等）
-│                   │  - 图例、标注
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│  CJK 文字转路径    │  <text> → <path>
-│  (opentype.js)    │  字体从 KV 加载，内存缓存
-└──────┬───────────┘
-       │
-       ▼
-┌──────────────────┐
-│  PNG 光栅化       │  resvg-wasm SVG → PNG
-│                   │  返回 image/png 响应
-└──────────────────┘
+┌─────────────────────────────┐
+│   Cloudflare Worker         │
+│                             │
+│  MCP 端点 (/mcp)            │◄── JSON-RPC 工具调用
+│         │                   │
+│         ▼                   │
+│  Spec 规范化                 │    输入 → PlotSpec
+│         │                   │
+│         ▼                   │
+│  SVG 生成                    │    纯字符串模板
+│         │                   │
+│         ▼                   │
+│  中文文本转路径               │    opentype.js（字体从 KV 加载）
+│         │                   │
+│         ▼                   │
+│  PNG 光栅化                  │    resvg-wasm
+│         │                   │
+│         ▼                   │
+│  KV 短链存储                 │    5 分钟 TTL
+│                             │
+└─────────────────────────────┘
+    │
+    ▼
+  PNG URL → 客户端
 ```
 
-核心设计决策：
-- **无头浏览器为零**：SVG 作为字符串构造，由 resvg-wasm（Rust → WASM）光栅化
-- **字形路径内嵌**：CJK 字形预转为 SVG path，绕过 WASM 运行时的字体匹配问题
-- **KV 存大资产**：字体文件（2.5MB）存 KV，每个 Worker isolate 加载一次，内存缓存
-- **Bundle 体积**：~1MB gzip（CF 免费版 3MB 限制内）
+无需无头浏览器。无外部存储。一切运行在单个 Cloudflare Worker + KV 中。
+
+### 包大小
+
+- Worker 打包：~1 MB gzip（远低于 CF 免费版 3 MB 限制）
+- 中文字体：2.5 MB，存储在 KV 中（首次请求时加载，缓存在 Worker 内存中）
 
 ---
 
-## 依赖
+## MCP 工具参考
 
-| 包 | 用途 |
-|---|------|
-| [`@resvg/resvg-wasm`](https://github.com/nicbarker/resvg-js) | SVG → PNG 光栅化（Rust 编译为 WASM） |
-| [`opentype.js`](https://opentype.js.org/) | CJK 文字转路径 |
-| [`expr-eval`](https://github.com/silentmatt/expr-eval) | 数学表达式解析器，支持 `f(x)` 绘图 |
-
-无其他运行时依赖。总 bundle ~1MB gzip。
+| 工具 | 说明 | 关键参数 |
+|------|------|----------|
+| `plot` / `plot_png_link` | 单表达式图表 | `expr`、`title`、`x_min`、`x_max`、`annotations` |
+| `plot_multi` | 多表达式叠加 | `exprs[]`、`labels[]`、`title` |
+| `plot_series` | 数据驱动图表 | `series[]`，含 `type`、`points`、`color`、`error` |
+| `plot_bar` | 快速柱状图 | `categories[]`、`values[]`、`title` |
+| `multi_plot` | 子图网格 | `rows`、`cols`、`plots[]` |
+| `teaching` | 数学教学模板 | `topic`：`definite_integral`、`derivative_tangent`、`fourier_series`、`projectile`、`simple_harmonic`、`energy_conservation`、`rc_circuit`、`parabola` |
+| `analysis` | 统计分析 | `action`：`describe`、`corr`、`groupby` |
+| `force_diagram_link` | 物理受力图 | 物体、连接器、接触面 |
+| `circuit_diagram_link` | 电路示意图 | 元件、导线 |
+| `venn_diagram_link` | 韦恩图 | 集合（标签 + 值） |
+| `c_memory_diagram_link` | C 语言内存布局 | 变量、指针、数组 |
 
 ---
 
-## License
+## 许可证
 
 MIT
