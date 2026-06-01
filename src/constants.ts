@@ -3,7 +3,7 @@ export interface Env {
 }
 
 export const SERVER_NAME = "plot-mcp-worker";
-export const SERVER_VERSION = "0.4.13";
+export const SERVER_VERSION = "0.4.14";
 export const SHORT_LINK_PATH_PREFIX = "/s/";
 export const SHORT_LINK_TOKEN_LENGTH = 8;
 export const SHORT_LINK_TTL_SECONDS = 60 * 60 * 24 * 30;

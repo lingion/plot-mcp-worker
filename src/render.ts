@@ -1104,3 +1104,4 @@ export async function renderPngResponse(svg: string, env: Env): Promise<Response
     },
   });
 }
+
