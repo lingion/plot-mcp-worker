@@ -105,6 +105,13 @@ function hasCjk(text: string): boolean {
   return /[㐀-鿿豈-﫿]/.test(text);
 }
 
+/** Characters that resvg's built-in fonts typically can't render (math, superscripts, subscripts, etc.) */
+const SPECIAL_UNICODE_RE = /[∫∑∏√∂∞≠≈≤≥±×÷°αβγδθελπσφωΩ⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁽⁾₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎·—–…←→↑↓↔↕]/;
+
+function needsPathify(text: string): boolean {
+  return hasCjk(text) || SPECIAL_UNICODE_RE.test(text);
+}
+
 function xmlUnescape(text: string): string {
   return text
     .replace(/&amp;/g, "&")
@@ -132,7 +139,7 @@ function measureText(font: any, text: string, fontSize: number): number {
 export async function pathifyCjkText(svg: string, env: Env): Promise<string> {
   const font = await loadCjkPathFont(env);
   return svg.replace(/<text([^>]*)>([\s\S]*?)<\/text>/g, (full, attrs, rawText) => {
-    if (rawText.includes("<tspan") || !hasCjk(rawText)) return full;
+    if (rawText.includes("<tspan") || !needsPathify(rawText)) return full;
     const text = xmlUnescape(rawText);
     const fontSize = Number(attrValue(attrs, "font-size") || DEFAULT_FONT_SIZE);
     let x = Number(attrValue(attrs, "x") || 0);
