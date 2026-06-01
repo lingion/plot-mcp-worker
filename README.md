@@ -14,7 +14,7 @@ Zero dependencies at runtime. No headless browser. Pure SVG → PNG via resvg-wa
 
 sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `[-1, -0.5, 0, 0.5, 1]`, auto legend outside plot area.
 
-![Trigonometric Composition](docs/showcase/trig_composition.png)
+![Trigonometric Composition](docs/showcase/en/01_trig_composition.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -31,7 +31,7 @@ sin, cos, and their sum — auto-detected π-mode x-axis, trig y-special ticks `
 
 Progressively adding odd harmonics to approximate a square wave. 4 series, auto π-axis, math preset.
 
-![Fourier Approximation](docs/showcase/fourier_approx.png)
+![Fourier Approximation](docs/showcase/en/02_fourier_approx.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -48,7 +48,7 @@ Progressively adding odd harmonics to approximate a square wave. 4 series, auto 
 
 Automatic asymptote break detection — no spikes, no vertical lines connecting ±∞. The engine detects sign-flip + large Δy and breaks the path.
 
-![tan(x) Discontinuity](docs/showcase/tan_discontinuity.png)
+![tan(x) Discontinuity](docs/showcase/en/03_tan_discontinuity.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -64,7 +64,7 @@ Automatic asymptote break detection — no spikes, no vertical lines connecting 
 
 Classic signal processing function with removable singularity handling at x=0.
 
-![sinc Function](docs/showcase/sinc_function.png)
+![sinc Function](docs/showcase/en/04_sinc_function.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -80,7 +80,7 @@ Classic signal processing function with removable singularity handling at x=0.
 
 Vertical asymptote markers at x = ±1. The engine renders pole gaps without artifact spikes.
 
-![Rational Asymptotes](docs/showcase/rational_asymptotes.png)
+![Rational Asymptotes](docs/showcase/en/05_rational_asymptotes.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -100,7 +100,7 @@ Vertical asymptote markers at x = ±1. The engine renders pole gaps without arti
 
 Exponential decay × trig — automatic nice ticks, smooth rendering across 15 units.
 
-![Damped Oscillation](docs/showcase/damped_oscillation.png)
+![Damped Oscillation](docs/showcase/en/06_damped_oscillation.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -116,7 +116,7 @@ Exponential decay × trig — automatic nice ticks, smooth rendering across 15 u
 
 Absolute value composition — non-trivial waveform with sign changes.
 
-![Rectified Product](docs/showcase/absolute_value.png)
+![Rectified Product](docs/showcase/en/07_absolute_value.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -132,7 +132,7 @@ Absolute value composition — non-trivial waveform with sign changes.
 
 Three Gaussians with different means and variances — normal distribution rendering at its finest.
 
-![Gaussian Mixture](docs/showcase/gaussian_mixture.png)
+![Gaussian Mixture](docs/showcase/en/08_gaussian_mixture.png)
 
 ```json
 {"tool": "plot_multi", "arguments": {
@@ -149,7 +149,7 @@ Three Gaussians with different means and variances — normal distribution rende
 
 Area shading, point markers, vertical line, and text labels — all annotation types in one chart.
 
-![Annotated Peaks](docs/showcase/annotated_peaks.png)
+![Annotated Peaks](docs/showcase/en/09_annotated_peaks.png)
 
 ```json
 {"tool": "plot_png_link", "arguments": {
@@ -172,7 +172,7 @@ Area shading, point markers, vertical line, and text labels — all annotation t
 
 Forecast vs Actual vs Target — asymmetric error bars on scatter, clean legend outside plot area.
 
-![Business Error Bars](docs/showcase/business_error_bars.png)
+![Business Error Bars](docs/showcase/en/10_business_error_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -192,7 +192,7 @@ Forecast vs Actual vs Target — asymmetric error bars on scatter, clean legend 
 
 3 models × 4 tests — per-bar error bars, auto-category labels.
 
-![Grouped Bars](docs/showcase/grouped_bars.png)
+![Grouped Bars](docs/showcase/en/11_grouped_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -213,7 +213,7 @@ Forecast vs Actual vs Target — asymmetric error bars on scatter, clean legend 
 
 Cloud cost breakdown — compute, storage, network stacked by month.
 
-![Stacked Bars](docs/showcase/stacked_bars.png)
+![Stacked Bars](docs/showcase/en/12_stacked_bars.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -234,7 +234,7 @@ Cloud cost breakdown — compute, storage, network stacked by month.
 
 Team time allocation — donut-style with percentage labels.
 
-![Pie Chart](docs/showcase/pie_chart.png)
+![Pie Chart](docs/showcase/en/13_pie_chart.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -249,7 +249,7 @@ Team time allocation — donut-style with percentage labels.
 
 Response latency distribution with auto-binning.
 
-![Histogram](docs/showcase/histogram.png)
+![Histogram](docs/showcase/en/14_histogram.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -265,7 +265,7 @@ Response latency distribution with auto-binning.
 
 Model accuracy comparison — median, quartiles, whiskers, outliers.
 
-![Box Plot](docs/showcase/box_plot.png)
+![Box Plot](docs/showcase/en/15_box_plot.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -285,7 +285,7 @@ Model accuracy comparison — median, quartiles, whiskers, outliers.
 
 Training loss over 10 epochs — y-axis automatically switches to logarithmic tick formatting.
 
-![Log Scale](docs/showcase/log_scale.png)
+![Log Scale](docs/showcase/en/16_log_scale.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -302,7 +302,7 @@ Training loss over 10 epochs — y-axis automatically switches to logarithmic ti
 
 Experimental measurements where uncertainty is not symmetric — `error: { plus: [...], minus: [...] }`.
 
-![Scatter Asymmetric](docs/showcase/scatter_asymmetric.png)
+![Scatter Asymmetric](docs/showcase/en/17_scatter_asymmetric.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -318,7 +318,7 @@ Experimental measurements where uncertainty is not symmetric — `error: { plus:
 
 Three views of the same noisy data: raw scatter, smoothed line (window=3), and min-max normalized.
 
-![Transform Pipeline](docs/showcase/transform_pipeline.png)
+![Transform Pipeline](docs/showcase/en/18_transform_pipeline.png)
 
 ```json
 {"tool": "plot_series", "arguments": {
@@ -338,7 +338,7 @@ Three views of the same noisy data: raw scatter, smoothed line (window=3), and m
 
 Four different chart types in one figure — line, scatter, function — with shared legend outside the grid.
 
-![Subplot 2x2](docs/showcase/subplot_2x2.png)
+![Subplot 2x2](docs/showcase/en/19_subplot_2x2.png)
 
 ```json
 {"tool": "multi_plot", "arguments": {
@@ -359,7 +359,7 @@ Four different chart types in one figure — line, scatter, function — with sh
 
 Built-in teaching module: shaded integral region, formula, bounds.
 
-![Teaching Integral](docs/showcase/teaching_integral.png)
+![Teaching Integral](docs/showcase/en/20_teaching_integral.png)
 
 ```json
 {"tool": "teaching", "arguments": {
