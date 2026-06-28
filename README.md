@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/lang-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/render-SVG%20%2B%20resvg--wasm-22D3EE?style=flat-square" alt="resvg-wasm">
   <a href="README_CN.md"><img src="https://img.shields.io/badge/README-中文-CC0000?style=flat-square" alt="中文"></a>
+  <img src="https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue?style=flat-square" alt="License">
 </p>
 
 ---
