@@ -1,12 +1,28 @@
-# plot-mcp-worker
+<p align="center">
+  <img src="docs/logo.png" width="100">
+</p>
 
-[中文版](README_CN.md)
+<h1 align="center">plot-mcp-worker</h1>
 
-A serverless chart rendering engine on Cloudflare Workers. Expose an MCP server that lets any AI agent generate PNG/SVG charts from a single JSON call — no headless browser, no server, no storage bucket.
+<p align="center">
+  A serverless MCP chart rendering engine on Cloudflare Workers.<br>
+  Let any AI agent generate PNG/SVG charts, STEM diagrams, and visualizations from a single JSON call.
+</p>
 
-Charts are rendered as SVG, then rasterized to PNG via [resvg-wasm](https://github.com/nicbarker/resvg-js). CJK text (GB2312 + punctuation + math symbols, 7500+ glyphs) is handled through an opentype.js text-to-path pipeline that embeds font outlines directly into the SVG, ensuring correct rendering regardless of client fonts.
+<p align="center">
+  <img src="https://img.shields.io/github/stars/lingion/plot-mcp-worker?style=flat-square&logo=github" alt="Stars">
+  <img src="https://img.shields.io/badge/runtime-Cloudflare%20Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="CF Workers">
+  <img src="https://img.shields.io/badge/protocol-MCP-6F42C1?style=flat-square" alt="MCP">
+  <img src="https://img.shields.io/badge/lang-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/render-SVG%20%2B%20resvg--wasm-22D3EE?style=flat-square" alt="resvg-wasm">
+  <a href="README_CN.md"><img src="https://img.shields.io/badge/README-中文-CC0000?style=flat-square" alt="中文"></a>
+</p>
 
-After deployment, your endpoint will be available at `https://<your-worker>.<your-subdomain>.workers.dev/mcp`.
+---
+
+> **Keywords:** MCP server, Model Context Protocol, chart generation, function plot, data visualization, STEM diagram, physics force diagram, circuit schematic, 3D geometry, Venn diagram, Cloudflare Workers, serverless, SVG rendering, AI agent tools, Claude MCP, math plotter
+
+---
 
 ---
 
