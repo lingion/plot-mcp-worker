@@ -776,6 +776,13 @@ No headless browser. No external storage. Everything runs in a single Cloudflare
 
 ---
 
+## Documentation
+
+- **[Operation Guide](https://blog.qdp.qzz.io/docs/plot-mcp/overview)** — step-by-step user manual covering all 40+ tools, endpoints, local development, and troubleshooting
+- **[Technical Write-up](https://blog.qdp.qzz.io/plot-mcp-serverless-charts)** — architecture deep-dive: expression parser, 5-transform data pipeline, smart axis intelligence, CJK text-to-path, diagram generators
+
+---
+
 ## License
 
 MIT
