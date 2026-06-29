@@ -785,4 +785,4 @@ No headless browser. No external storage. Everything runs in a single Cloudflare
 
 ## License
 
-MIT
+[CC BY-NC-SA 4.0](LICENSE)
